@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "Keyshoal",
+    "slug": "keyshoal",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "platforms": ["ios"],
+    "updates": { "enabled": false },
+    "ios": {
+      "bundleIdentifier": "app.keyshoal.vault",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "Keyshoal syncs your encrypted vault with your computer on this Wi-Fi network.",
+        "NSAppTransportSecurity": { "NSAllowsLocalNetworking": true }
+      }
+    },
+    "plugins": [
+      ["expo-camera", {
+        "cameraPermission": "Use your camera to scan a private Keyshoal pairing code.",
+        "recordAudioAndroid": false,
+        "microphonePermission": false
+      }]
+    ]
+  }
+}

@@ -23,3 +23,12 @@ coverage/
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Platform outputs and signing material
+/mobile/ios/
+/mobile/android/
+*.ipa
+*.p12
+*.mobileprovision
+credentials.json
+.playwright-cli/

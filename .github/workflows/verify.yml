@@ -1,0 +1,96 @@
+name: Build and verify
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: keyshoal-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      EXPO_NO_TELEMETRY: '1'
+      KEYSHOAL_EVIDENCE: ${{ github.workspace }}/build/evidence
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.22.1'
+          cache: npm
+      - run: npm ci
+      - run: npm exec -- install-electron
+      - run: npm exec -- playwright install --with-deps chromium
+      - run: sudo apt-get install -y apparmor xdotool xvfb xauth
+      - run: KEYSHOAL_REQUIRE_LAN=1 npm test
+      - run: xvfb-run -a npm run test:desktop
+      - run: xvfb-run -a -s '-screen 0 1440x1000x24' npm run test:chrome
+      - run: npm run package:linux
+      - name: Start packaged app with the sandbox enabled
+        run: |
+          sudo install -d -o root -g root -m 0755 /opt/keyshoal
+          sudo cp -a dist/keyshoal-linux-x64/. /opt/keyshoal/
+          sudo chown -R root:root /opt/keyshoal
+          sudo chmod -R go-w /opt/keyshoal
+          if grep -qx 1 /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then
+            sudo apparmor_parser -r -T docs/keyshoal.apparmor
+          fi
+          xvfb-run -a node tests/package-smoke.mjs /opt/keyshoal/keyshoal
+      - run: npm run export:ios
+      - name: Generate Linux checksum
+        working-directory: dist
+        run: sha256sum keyshoal-linux-x64.tar.xz > SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: keyshoal-linux-x64
+          path: |
+            dist/keyshoal-linux-x64.tar.xz
+            dist/SHA256SUMS
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: keyshoal-linux-smoke-screens
+          path: ${{ env.KEYSHOAL_EVIDENCE }}
+
+  ios-simulator:
+    runs-on: macos-26
+    timeout-minutes: 35
+    env:
+      EXPO_NO_TELEMETRY: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.22.1'
+          cache: npm
+      - run: npm ci
+      - run: npm exec --workspace @keyshoal/mobile -- expo prebuild --platform ios --no-install
+      - run: pod install
+        working-directory: mobile/ios
+      - name: Compile the unsigned simulator app
+        working-directory: mobile/ios
+        run: |
+          set -o pipefail
+          xcodebuild -workspace Keyshoal.xcworkspace -scheme Keyshoal -configuration Release \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/keyshoal-xcode" \
+            CODE_SIGNING_ALLOWED=NO build | xcbeautify
+      - name: Archive simulator app
+        run: |
+          built="$RUNNER_TEMP/keyshoal-xcode/Build/Products/Release-iphonesimulator"
+          test -f "$built/Keyshoal.app/Keyshoal"
+          test -f "$built/Keyshoal.app/main.jsbundle"
+          tar -czf "$RUNNER_TEMP/keyshoal-ios-simulator-arm64.tar.gz" -C "$built" Keyshoal.app
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: keyshoal-ios-simulator-arm64
+          path: ${{ runner.temp }}/keyshoal-ios-simulator-arm64.tar.gz
+          if-no-files-found: error
