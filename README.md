@@ -41,4 +41,4 @@ npm run test:chrome
 npm run export:ios
 ```
 
-Use isolated X11 for the UI tests. Chrome automation needs `xdotool`, OpenSSL, and `npm exec -- playwright install chromium`. On a machine with Xvfb, run the UI tests under `xvfb-run -a`. Unit tests skip the TLS integration check if no private IPv4 interface is available. Set `KEYSHOAL_REQUIRE_LAN=1` to require it.
+Use isolated X11 for the UI tests. Screenshot evidence needs FFmpeg with X11 capture. Chrome automation needs `xdotool`, OpenSSL, and `npm exec -- playwright install chromium`. On a machine with Xvfb, run the UI tests under `xvfb-run -a`. Unit tests skip the TLS integration check if no private IPv4 interface is available. Set `KEYSHOAL_REQUIRE_LAN=1` to require it.

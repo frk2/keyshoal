@@ -1,7 +1,8 @@
 import { _electron as electron } from 'playwright';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 
 export const PASS = 'Synthetic automation fixture only';
@@ -12,12 +13,19 @@ export async function instance() {
     XDG_RUNTIME_DIR: path.join(folder, 'run')
   };
   for (const key of ['XDG_CONFIG_HOME', 'XDG_CACHE_HOME','XDG_RUNTIME_DIR']) mkdirSync(env[key], { mode: 0o700 });
-  const app = await electron.launch({
-    args: [path.resolve('build/desktop'), '--ozone-platform=x11'],
-    env, timeout: 20_000
-  });
-  const page = await app.firstWindow({ timeout: 15_000 });
-  await page.getByRole('heading', { name: 'Create your vault' }).waitFor({ timeout: 8000 });
+  let app, page;
+  try {
+    app = await electron.launch({
+      args: [path.resolve('build/desktop'), '--ozone-platform=x11'],
+      env, timeout: 20_000
+    });
+    page = await app.firstWindow({ timeout: 15_000 });
+    await page.getByRole('heading', { name: 'Create your vault' }).waitFor({ timeout: 8000 });
+  } catch (failure) {
+    await app?.close().catch(() => {});
+    rmSync(folder, { recursive: true, force: true });
+    throw failure;
+  }
   return {
     app, page, env, folder,
     close: async () => { await app.close(); rmSync(folder, { recursive: true, force: true }); }
@@ -49,12 +57,16 @@ export async function evidence(page, file, app) {
   mkdirSync(process.env.KEYSHOAL_EVIDENCE, { recursive: true });
   const filename = path.join(process.env.KEYSHOAL_EVIDENCE, file);
   if (!app) return page.screenshot({ path: filename });
-  const data = await app.evaluate(async ({ BrowserWindow }) => {
+  const handle = await app.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows()[0];
     if (!window.isVisible()) window.show();
-    return (await window.capturePage()).toPNG().toString('base64');
+    return window.getNativeWindowHandle().readUInt32LE();
   });
-  const png = Buffer.from(data, 'base64');
-  assert.ok(png.length > 5000, 'No meaningful desktop screenshot');
-  writeFileSync(filename, png);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  // Capture only the app window on the isolated X11 display. Chromium's
+  // compositor capture can fail on software-rendered CI runners.
+  execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'x11grab',
+    '-draw_mouse', '0', '-window_id', String(handle), '-i', process.env.DISPLAY,
+    '-frames:v', '1', '-threads', '1', filename], { timeout: 10_000 });
+  assert.ok(statSync(filename).size > 5000, 'No meaningful desktop screenshot');
 }

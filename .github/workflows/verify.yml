@@ -27,7 +27,7 @@ jobs:
       - run: npm ci
       - run: npm exec -- install-electron
       - run: npm exec -- playwright install --with-deps chromium
-      - run: sudo apt-get install -y apparmor xdotool xvfb xauth
+      - run: sudo apt-get install -y apparmor ffmpeg xdotool xvfb xauth
       - run: KEYSHOAL_REQUIRE_LAN=1 npm test
       - run: xvfb-run -a npm run test:desktop
       - run: xvfb-run -a -s '-screen 0 1440x1000x24' npm run test:chrome
