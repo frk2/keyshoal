@@ -1,0 +1,25 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local vault data
+*.vault
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite*
+
+# Dependencies and generated output
+node_modules/
+.expo/
+dist/
+build/
+coverage/
+
+# OS metadata
+.DS_Store
+Thumbs.db
