@@ -12,7 +12,7 @@ Run from the extracted Linux distribution folder on a host with AppArmor enabled
 sudo install -d -o root -g root -m 0755 /opt/keyshoal
 sudo cp -a . /opt/keyshoal/
 sudo chown -R root:root /opt/keyshoal
-sudo chmod -R go-w /opt/keyshoal
+sudo chmod -R a+rX,go-w /opt/keyshoal
 sudo install -m 0644 /opt/keyshoal/docs/keyshoal.apparmor /etc/apparmor.d/keyshoal
 sudo apparmor_parser -r -T /etc/apparmor.d/keyshoal
 /opt/keyshoal/keyshoal

@@ -6,7 +6,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: keyshoal-${{ github.workflow }}-${{ github.ref }}
+  group: keyshoal-${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:

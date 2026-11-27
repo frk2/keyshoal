@@ -7,6 +7,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { getCurrentFuseWire, FuseV1Options as F, FuseState } from '@electron/fuses';
 
 const file = path.resolve(process.argv[2]);
+assert.equal(lstatSync(file).mode & 0o777, 0o755);
+assert.equal(lstatSync(path.join(path.dirname(file), 'resources', 'app.asar')).mode & 0o777, 0o644);
 const fuses = await getCurrentFuseWire(file);
 assert.equal(fuses[F.RunAsNode], FuseState.DISABLE);
 assert.equal(fuses[F.EnableNodeOptionsEnvironmentVariable], FuseState.DISABLE);

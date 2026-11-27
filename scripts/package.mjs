@@ -1,6 +1,6 @@
 import { packager } from '@electron/packager';
 import { flipFuses, FuseV1Options as F, FuseVersion } from '@electron/fuses';
-import { cp, mkdir } from 'node:fs/promises';
+import { chmod, cp, lstat, mkdir, readdir } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -35,6 +35,20 @@ await Promise.all([
   cp('README.md', path.join(directory, 'README.md')),
   cp('docs', path.join(directory, 'docs'), { recursive: true })
 ]);
+// Distribution files (never user data) must stay usable after a root-owned
+// installation even if the build or Electron cache used a private umask.
+async function distributionMode(file) {
+  const stat = await lstat(file);
+  if (stat.isDirectory()) {
+    await chmod(file, 0o755);
+    await Promise.all((await readdir(file)).map(child => distributionMode(path.join(file, child))));
+  } else if (stat.isFile()) {
+    await chmod(file, (stat.mode & 0o111) ? 0o755 : 0o644);
+  }
+}
+await distributionMode(directory);
 const filename = directory + '.tar.xz';
-execFileSync('tar', ['-cJf', filename, '-C', path.dirname(directory), path.basename(directory)], { stdio: 'inherit' });
+execFileSync('tar', ['-cJf', filename, '-C', path.dirname(directory), path.basename(directory)], {
+  env: { ...process.env, XZ_OPT: '-T2 -3' }, stdio: 'inherit'
+});
 console.log(filename);
