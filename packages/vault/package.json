@@ -6,7 +6,7 @@
   "exports": {
     ".": "./vault.js",
     "./protocol": "./protocol.js",
-    "./client": "./client.js"
+    "./replica": "./replica.js"
   },
   "dependencies": {
     "@noble/ciphers": "2.4.0",

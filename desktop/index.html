@@ -11,7 +11,7 @@
 <body>
 <header>
   <div class="brand"><span class="mark" aria-hidden="true">KS</span><div>Keyshoal<small>LOCAL PASSWORD VAULT</small></div></div>
-  <nav id="nav" hidden><button id="nav-vault" class="secondary" type="button">Vault</button><button id="nav-devices" class="secondary" type="button">Devices</button><button id="lock" class="outline" type="button">Lock</button></nav>
+  <nav id="nav" hidden><span id="sync-badge" role="status" class="sync-badge"></span><button id="nav-vault" class="secondary" type="button">Vault</button><button id="nav-devices" class="secondary" type="button">Devices</button><button id="lock" class="outline" type="button">Lock</button></nav>
 </header>
 <p id="error" class="error" role="alert" hidden></p>
 <main id="app" aria-live="off"><p>Opening Keyshoal…</p></main>
@@ -23,7 +23,9 @@
       <label>Passphrase <input id="passphrase" type="password" required maxlength="1024" autocomplete="off" spellcheck="false"></label>
       <label id="confirm-label">Confirm passphrase <input id="confirm" type="password" maxlength="1024" autocomplete="off" spellcheck="false"></label>
       <label id="key-label">Security key <input id="key" type="password" maxlength="70" autocomplete="off" spellcheck="false"></label>
+      <label id="setup-label" hidden>Setup code <input id="setup-code" type="password" maxlength="240" autocomplete="off" spellcheck="false"></label>
       <button id="access-submit" type="submit"></button>
+      <button id="access-switch" class="secondary" type="button" hidden></button>
     </form>
   </section>
 </template>
@@ -57,21 +59,27 @@
 </template>
 <template id="devices">
   <section class="panel devices"><p class="eyebrow">Same Wi-Fi only</p><h1>Devices</h1>
-    <p class="note">Keep this vault unlocked while syncing. Keyshoal never uses a cloud account.</p>
+    <p class="note">Your vault works offline. While unlocked, sync finds peers using Bonjour on the local network.</p>
     <div class="inset">
-      <h2>LAN sync</h2><p id="lan-status"></p>
-      <label id="address-label">This computer’s private IPv4 address <select id="addresses"></select></label>
-      <div class="buttons"><button id="start-sync">Start LAN sync</button><button id="stop-sync" class="outline">Stop sync</button><button id="invite" class="outline">Show pairing QR</button></div>
+      <h2>Peer sync</h2><p id="lan-status" role="status"></p><p id="last-sync" class="note"></p>
+      <div class="buttons"><button id="start-sync">Resume sync</button><button id="stop-sync" class="outline">Pause sync</button><button id="sync-now" class="secondary">Sync now</button></div>
+      <h3>Set up a replica</h3><p class="note">Every unlocked device can find other replicas on the same network. No computer is the master.</p>
+      <div class="buttons"><button id="invite" class="outline">Show setup QR</button><button id="copy-setup" class="secondary">Copy setup code</button></div>
+      <p id="setup-note" class="note" role="status"></p>
       <div id="qr" class="inset" hidden>
-        <p>The QR contains your security key. Scan it privately with the iOS app. Never save or share a photo of it.</p>
-        <img id="qr-image" width="252" height="252" alt="One-use Keyshoal pairing code">
-        <button id="hide-qr" class="secondary">Cancel pairing</button>
+        <p>The QR contains your security key. Scan it privately. The new device still needs the vault passphrase.</p>
+        <img id="qr-image" width="252" height="252" alt="Keyshoal peer setup code">
+        <button id="hide-qr" class="secondary">Hide setup QR</button>
       </div>
-      <h3>Paired devices</h3><div id="peer-list" class="peers"></div>
     </div>
     <div class="inset"><h2>Chrome autofill</h2><p id="bridge-status"></p><p class="note">Install the companion extension and select a login in its popup on the matching HTTPS site. Keyshoal never submits forms.</p></div>
     <div class="inset"><h2>Recovery key</h2><p class="note">Keep the 64-character key offline and separate from the passphrase. Losing either means losing access.</p><button id="recovery" class="outline">Show security key</button><code id="recovery-value" hidden></code></div>
   </section>
+</template>
+<template id="conflicts">
+  <p class="eyebrow">Review conflict</p><h2 id="conflict-title"></h2>
+  <p class="note">More than one version was changed offline. Compare them and choose what to keep. You can do this while offline.</p>
+  <div id="conflict-versions"></div>
 </template>
 <template id="backup">
   <section class="access panel"><p class="eyebrow">One-time setup</p><h1>Save your security key.</h1>

@@ -43,6 +43,10 @@ try {
   const port = server.address().port;
   const origin = 'https://127.0.0.1:' + port;
   await createVault(run.page);
+  await run.page.getByRole('button', { name: 'Devices', exact: true }).click();
+  await run.page.getByRole('button', { name: 'Pause sync', exact: true }).click();
+  await run.page.locator('#sync-badge').filter({ hasText: 'Offline · sync paused' }).waitFor();
+  await run.page.getByRole('button', { name: 'Vault', exact: true }).click();
   const password = await addLogin(run.page, origin);
   browser = await chromium.launchPersistentContext(profile, {
     channel: 'chromium', headless: false, ignoreDefaultArgs: ['--disable-extensions'], ignoreHTTPSErrors: true, env: {
@@ -141,11 +145,17 @@ try {
     assert.equal(await page.getByLabel('Password').inputValue(), '');
     await popup.close();
   }
+  await run.page.getByRole('button', { name: 'Delete', exact: true }).click();
+  await run.page.getByRole('button', { name: 'Delete login', exact: true }).click();
+  await run.page.getByRole('heading', { name: 'No logins yet' }).waitFor();
+  popup = await action(origin + '/', 'No saved login for this exact website.');
+  assert.equal(await page.getByLabel('Password').inputValue(), '');
+  await popup.close();
   await run.page.getByRole('button', { name: 'Lock', exact: true }).click();
   await run.page.getByRole('heading', { name: 'Unlock Keyshoal' }).waitFor();
   popup = await action(origin + '/', 'Open and unlock the Keyshoal desktop app first.');
   assert.equal(await page.getByLabel('Password').inputValue(), '');
-  console.log('Chrome smoke passed: real action popup, native messaging, exact-origin fill, no auto-submit, and rejected cross-origin form, registration form, wrong origin and locked vault.');
+  console.log('Chrome smoke passed with peer sync paused: real action popup, native messaging, exact-origin fill, no auto-submit, and rejected cross-origin form, registration form, wrong origin, deleted login and locked vault.');
 } finally {
   await browser?.close();
   await server?.close();

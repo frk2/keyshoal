@@ -60,8 +60,10 @@ export async function evidence(page, file, app) {
   const handle = await app.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows()[0];
     if (!window.isVisible()) window.show();
+    window.focus();
     return window.getNativeWindowHandle().readUInt32LE();
   });
+  execFileSync(process.env.KEYSHOAL_XDOTOOL || 'xdotool', ['windowraise', String(handle)], { timeout: 5000 });
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   // Capture only the app window on the isolated X11 display. Chromium's
   // compositor capture can fail on software-rendered CI runners.

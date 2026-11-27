@@ -13,7 +13,11 @@ export function answerNative(vault, request) {
       !request.origin.startsWith('https://') || allowedOrigin(request.origin) !== request.origin) {
     return { error: 'Keyshoal can only fill an exact HTTPS origin.' };
   }
-  const matching = vault.catalogue().filter(item => item.origin === request.origin);
+  const sameOrigin = vault.catalogue().filter(item => item.origin === request.origin);
+  const matching = sameOrigin.filter(item => !item.conflict);
+  if (!matching.length && sameOrigin.some(item => item.conflict)) {
+    return { error: 'Resolve this login’s conflict in Keyshoal before filling it.' };
+  }
   if (request.action === 'list') {
     return { entries: matching.slice(0, 100).map(({ id, title }) => ({ id, title })) };
   }

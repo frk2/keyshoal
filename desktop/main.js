@@ -3,9 +3,11 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import QRCode from 'qrcode';
-import { generatePassword, isId, MAX_VAULT, Vault } from '@keyshoal/vault';
+import { generatePassword, isId } from '@keyshoal/vault';
+import { Replica } from '@keyshoal/vault/replica';
+import { decodeSetup, encodeSetup, MAX_JOURNAL } from '@keyshoal/vault/protocol';
 import { privateDirectory, readPrivate, writePrivate } from './files.js';
-import { LanHub } from './sync.js';
+import { PeerNetwork } from './sync.js';
 import { answerNative, startBridge } from './bridge.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -23,6 +25,12 @@ function clearClipboard() {
   clearTimeout(clipboardTimer);
   if (clipboardValue !== undefined && clipboard.readText() === clipboardValue) clipboard.clear();
   clipboardValue = undefined;
+}
+function writeClipboard(value) {
+  clearClipboard();
+  clipboardValue = value;
+  clipboard.writeText(value);
+  clipboardTimer = setTimeout(clearClipboard, 30_000);
 }
 function lock() {
   generation++;
@@ -49,32 +57,38 @@ function commit(bytes) {
 }
 function status() {
   return {
-    state: active ? 'open' : readPrivate(vaultFile, MAX_VAULT) ? 'locked' : 'new',
+    state: active ? 'open' : readPrivate(vaultFile, MAX_JOURNAL) ? 'locked' : 'new',
     catalogue: active ? active.catalogue() : [],
     sync: hub.status(), bridgeReady, bridgeError
   };
 }
-async function access(mode, input, key) {
+async function access(mode, input, secret) {
   if (active || unlockPending) throw new Error('A vault is already open or unlocking.');
   unlockPending = true;
   const start = generation;
-  let next;
+  let next, key = secret;
   try {
-    const bytes = readPrivate(vaultFile, MAX_VAULT);
+    const bytes = readPrivate(vaultFile, MAX_JOURNAL);
     if (mode === 'create') {
       if (bytes) throw new Error('A vault already exists.');
-      const result = await Vault.create(input, randomBytes);
+      const result = await Replica.create(input, randomBytes);
       next = result.vault;
       key = result.securityKey;
+    } else if (mode === 'join') {
+      if (bytes) throw new Error('A vault already exists on this device.');
+      const setup = decodeSetup(secret);
+      key = setup.key;
+      next = await Replica.join(setup.bootstrap, input, key, randomBytes);
     } else {
       if (!bytes) throw new Error('Create a vault first.');
-      next = await Vault.unlock(bytes, input, key, randomBytes);
+      next = await Replica.unlock(bytes, input, key, randomBytes);
     }
     if (start !== generation) throw new Error('Unlock cancelled.');
-    if (mode === 'create') writePrivate(vaultFile, next.bytes());
+    if (mode !== 'unlock' || bytes.subarray(0, 8).toString('ascii') !== 'KSREPL02') writePrivate(vaultFile, next.bytes());
     active = next;
     securityKey = key;
     touch();
+    void hub.start();
     return mode === 'create' ? { securityKey: key } : {};
   } catch (error) {
     next?.close();
@@ -98,36 +112,40 @@ const handlers = {
   status,
   create: pass => access('create', pass),
   unlock: (pass, key) => access('unlock', pass, key),
+  join: (pass, setup) => access('join', pass, setup),
   lock,
   activity: () => touch(),
-  reveal: id => vault().reveal(trustedId(id)),
+  reveal: (id, version) => vault().reveal(trustedId(id), version),
+  variants: id => vault().variants(trustedId(id)),
+  resolve: (id, version, stamp) => {
+    commit(vault().resolve(trustedId(id), version, stamp));
+    hub.changed();
+  },
   recovery: () => { vault(); return securityKey; },
   copy: id => {
-    clearClipboard();
-    clipboardValue = vault().reveal(trustedId(id));
-    clipboard.writeText(clipboardValue);
-    clipboardTimer = setTimeout(clearClipboard, 30_000);
+    writeClipboard(vault().reveal(trustedId(id)));
   },
   generate: () => { vault(); return generatePassword(randomBytes); },
   save: (fields, id, stamp) => {
     if (id !== undefined) checkEdit(id, stamp);
     const next = vault().withLogin(fields, id === undefined ? undefined : trustedId(id));
     commit(next.bytes);
+    hub.changed();
     return next.id;
   },
-  remove: (id, stamp) => { checkEdit(id, stamp); commit(vault().withoutLogin(id)); },
-  startSync: ip => hub.start(ip),
+  remove: (id, stamp) => { checkEdit(id, stamp); commit(vault().withoutLogin(id)); hub.changed(); },
+  startSync: () => hub.start(),
   stopSync: () => hub.stop(),
-  cancelInvite: () => hub.cancelInvite(),
+  syncNow: () => hub.syncNow(),
+  copySetup: () => writeClipboard(encodeSetup(securityKey, vault().bootstrap())),
   invite: async () => {
-    vault();
     const time = generation;
-    const { qr, expires } = hub.invite(securityKey);
-    const image = await QRCode.toDataURL(qr, { errorCorrectionLevel: 'M', width: 360, margin: 4 });
-    if (time !== generation || !hub.status().ip) throw new Error('Pairing was cancelled.');
-    return { image, expires };
-  },
-  revoke: id => { vault(); hub.revoke(trustedId(id)); }
+    const image = await QRCode.toDataURL(encodeSetup(securityKey, vault().bootstrap()), {
+      errorCorrectionLevel: 'M', width: 360, margin: 4
+    });
+    if (time !== generation) throw new Error('Setup was cancelled.');
+    return { image, expires: Date.now() + 90_000 };
+  }
 };
 
 function window() {
@@ -164,8 +182,7 @@ function open() {
     session.defaultSession.on('will-download', event => event.preventDefault());
     session.defaultSession.webRequest.onBeforeRequest(({ url }, done) =>
       done({ cancel: !url.startsWith('file:') && !url.startsWith('data:') }));
-    hub = new LanHub(dir, () => active, commit);
-    hub.onPeer(sendChanged);
+    hub = new PeerNetwork(() => active, commit, sendChanged);
     try {
       bridge = await startBridge(process.env.XDG_RUNTIME_DIR, request => answerNative(active, request));
       bridgeReady = Boolean(bridge);

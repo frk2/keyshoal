@@ -1,10 +1,8 @@
-# Build and verify iOS
+# iOS build and peer verification
 
-The app uses Expo SDK 58, an in-app camera scanner, Secure Store, and a small Swift Expo module for pinned TLS and atomic local storage. Expo Go cannot load the Swift module. No signing keys, credentials, EAS project ID or provisioning profile are checked in.
+Keyshoal uses Expo SDK 58, a Swift Expo module, Apple's Bonjour/Network framework and protected local storage. Expo Go cannot load this module. The project includes no signing data or EAS account identifiers.
 
-## Verified from Linux
-
-Run from the repository root.
+From the repository root:
 
 ```sh
 npm ci
@@ -13,14 +11,14 @@ EXPO_NO_TELEMETRY=1 npm exec --workspace @keyshoal/mobile -- expo prebuild --pla
 npm exec --workspace @keyshoal/mobile -- expo-modules-autolinking resolve --platform apple
 ```
 
-Metro produces an iOS Hermes JavaScript bundle under `mobile/dist`. Prebuild generates the native project, and the resolver must include `KeyshoalNative` / `KeyshoalNativeModule`. None of these compile Swift, run on iOS, or produce a signed IPA. GitHub’s macOS review job compiles and archives an unsigned Apple Silicon simulator app without signing credentials. On a Mac, extract the successful simulator artifact and run `xcrun simctl install booted Keyshoal.app` with a simulator already open. The simulator build does not install on an iPhone.
+Linux can export the Hermes JavaScript bundle and generated project. The GitHub macOS check compiles Swift and publishes an unsigned iOS Simulator app. On a Mac, unpack that artifact and run `xcrun simctl install booted Keyshoal.app` with a simulator open. That does not install the app on a real iPhone.
 
-## Build on a Mac or use EAS
+For a physical iPhone, use an authorized Apple Developer team, a matching bundle identifier, and a device provisioning profile. Build from `mobile/` on a Mac with `npx expo run:ios`, or link the approved EAS project using `eas init` and run `eas build --platform ios --profile preview`. Do not commit signing credentials. [Expo's device-build instructions](https://docs.expo.dev/tutorial/eas/ios-development-build-for-devices/)
 
-From `mobile/` in the monorepo, run `npx expo run:ios` using Xcode. For an installable IPA from Linux, use the authorized Expo account, its EAS project and a matching Apple Developer team and bundle identifier. From `mobile/`, link the authorized project with `eas init`, register the test device if using ad hoc distribution, and run `eas build --platform ios --profile preview`. The `simulator` profile can validate compilation without provisioning a phone. The `production` profile is for a later store build, not needed for smoke testing. Do not commit signing credentials. See [Expo’s device-build instructions](https://docs.expo.dev/tutorial/eas/ios-development-build-for-devices/).
+## Real-device acceptance
 
-## Required real-device checks
-
-- With synthetic data, scan a live desktop QR, accept the local network permission, reject an incorrect passphrase, then enrol with the correct one. Check expired, cancelled, and already claimed QR codes, and deny a connection if the server no longer presents the pinned certificate.
-- Reopen while offline using only the passphrase and the enrolled phone’s Keychain. Create, generate, edit, reveal, copy and delete a test login. Confirm the background lock and 30-second local pasteboard expiry.
-- Sync an offline edit and a separate desktop edit. Check both are preserved. Change the same login on both devices, resolve the conflict deliberately, and ensure revocation blocks a subsequent sync without losing local edits. Re-pair the same vault with a different desktop IP and verify no local edits were replaced.
+- With the phone disconnected, create a vault and login, edit it, lock, reopen and delete a throwaway entry. The app must not require a connection.
+- Show a setup QR on the phone and join a Linux replica with the code and passphrase. Reverse the pairing direction on a separate synthetic vault. A wrong passphrase and an unrelated vault must fail. Verify the iOS local-network permission prompt and the foreground/background lock transition.
+- With three replicas, transfer records between the two that did not create the vault while its original device is offline. Check that all devices can start, pause, resume and show sync status, and that stale devices catch up without manual IP entry.
+- Edit the same login differently on two disconnected devices. Reconnect and verify both versions are offered. Disconnect before picking one, compare and reveal one version at a time, then reconnect and verify convergence. Include delete-versus-edit and a late replica returning with an unseen edit.
+- Confirm Chrome on Linux can fill a locally available nonconflicting record with sync paused, then refuses a conflicting or deleted login. Test iPhone behavior across two real Wi-Fi access points or device sleep/rejoin. Autofill in iOS Safari is not part of this preview.

@@ -1,8 +1,9 @@
 const api = window.keyshoal;
 const $ = id => document.getElementById(id);
 const app = $('app');
-let model, page = 'vault', selected, editor = null, query = '', backupKey, revealTimer, qrTimer, qrVisible = false;
+let model, page = 'vault', selected, editor = null, query = '', backupKey, revealTimer, qrTimer;
 let renderVersion = 0;
+let joining = false;
 let refreshVersion = 0;
 let lastActivity = 0;
 
@@ -32,6 +33,7 @@ function add(container, tag, text, className) {
 function template(container, name) { container.replaceChildren($(name).content.cloneNode(true)); }
 function clearReveal() {
   clearTimeout(revealTimer);
+  for (const field of document.querySelectorAll('[data-conflict-secret]')) field.textContent = '••••••••••••';
   if ($('secret')) $('secret').textContent = '••••••••••••';
   if ($('reveal')) $('reveal').textContent = 'Reveal';
   if ($('recovery-value')) {
@@ -42,12 +44,10 @@ function clearReveal() {
   if (input) input.type = 'password';
   if ($('edit-reveal')) $('edit-reveal').textContent = 'Show password';
 }
-function clearQr(cancel = true) {
+function clearQr() {
   clearTimeout(qrTimer);
   if ($('qr-image')) $('qr-image').removeAttribute('src');
   if ($('qr')) $('qr').hidden = true;
-  if (cancel && qrVisible) void call('cancelInvite').catch(() => {});
-  qrVisible = false;
 }
 function render() {
   if (!model) return;
@@ -55,6 +55,7 @@ function render() {
   clearReveal();
   clearQr();
   $('nav').hidden = model.state !== 'open' || Boolean(backupKey);
+  updateSync();
   if (model.state !== 'open') return renderAccess();
   if (backupKey) {
     template(app, 'backup');
@@ -70,7 +71,8 @@ function render() {
   renderList();
   if (editor) return renderEditor();
   const row = model.catalogue.find(item => item.id === selected);
-  if (row) renderEntry(row);
+  if (row?.conflict) renderConflicts(row);
+  else if (row) renderEntry(row);
   else {
     add($('detail'), 'p', 'Personal vault', 'eyebrow');
     add($('detail'), 'h2', model.catalogue.length ? 'Choose a login' : 'No logins yet');
@@ -81,7 +83,11 @@ async function refresh(keepEditor = true) {
   const current = ++refreshVersion;
   const next = await call('status');
   if (current !== refreshVersion) return;
+  const catalogueUnchanged = model?.state === 'open' && next.state === 'open' &&
+    model.catalogue.length === next.catalogue.length &&
+    model.catalogue.every((row, i) => row.stamp === next.catalogue[i].stamp && row.id === next.catalogue[i].id);
   model = next;
+  updateSync();
   if (model.state !== 'open') {
     page = 'vault';
     selected = undefined;
@@ -92,39 +98,48 @@ async function refresh(keepEditor = true) {
     renderList();
     return;
   }
-  // Keep a live QR until it expires, is claimed, or this screen is left.
-  if (qrVisible && page === 'devices' && $('qr') && model.state === 'open' && model.sync.ip &&
-      Number($('qr').dataset.peers) === model.sync.peers.length) return;
+  if (keepEditor && catalogueUnchanged && model.state === 'open' && app.childElementCount) return;
   render();
 }
 function renderAccess() {
   template(app, 'access');
-  const creating = model.state === 'new';
-  $('access-title').textContent = creating ? 'Create your vault' : 'Unlock Keyshoal';
+  const first = model.state === 'new';
+  const creating = first && !joining;
+  const join = first && joining;
+  $('access-title').textContent = creating ? 'Create your vault' : join ? 'Join a vault' : 'Unlock Keyshoal';
   $('access-note').textContent = creating
     ? 'Choose a long passphrase, ideally several randomly chosen words. Keyshoal will generate a separate security key.'
-    : 'Enter the passphrase and security key you saved when you created this vault.';
+    : join ? 'Paste a setup code from any existing replica and enter the same passphrase. The new device can receive existing records when it finds a peer.'
+      : 'Enter the passphrase and security key you saved when you created this vault.';
   $('confirm-label').hidden = !creating;
   $('confirm').required = creating;
-  $('key-label').hidden = creating;
-  $('key').required = !creating;
-  $('access-submit').textContent = creating ? 'Create vault' : 'Unlock vault';
+  $('key-label').hidden = first;
+  $('key').required = !first;
+  $('setup-label').hidden = !join;
+  $('setup-code').required = join;
+  $('access-switch').hidden = !first;
+  $('access-switch').textContent = join ? 'Create a new vault' : 'Use setup code';
+  $('access-switch').onclick = () => { joining = !joining; render(); };
+  const label = creating ? 'Create vault' : join ? 'Join vault' : 'Unlock vault';
+  $('access-submit').textContent = label;
   $('access-form').onsubmit = act(async event => {
     event.preventDefault();
     const pass = $('passphrase').value;
     if (creating && pass !== $('confirm').value) throw new Error('The passphrases don’t match.');
-    const key = $('key').value.trim().toLowerCase();
-    $('passphrase').value = $('confirm').value = $('key').value = '';
+    const key = join ? $('setup-code').value : $('key').value.trim().toLowerCase();
+    $('passphrase').value = $('confirm').value = $('key').value = $('setup-code').value = '';
     const button = $('access-submit');
-    button.disabled = true;
+    button.disabled = $('access-switch').disabled = true;
     button.textContent = creating ? 'Creating…' : 'Unlocking…';
     try {
-      const result = creating ? await call('create', pass) : await call('unlock', pass, key);
+      const result = creating ? await call('create', pass) : await call(join ? 'join' : 'unlock', pass, key);
       backupKey = result.securityKey;
+      joining = false;
       await refresh(false);
     } finally {
       button.disabled = false;
-      button.textContent = creating ? 'Create vault' : 'Unlock vault';
+      if ($('access-switch')) $('access-switch').disabled = false;
+      button.textContent = label;
     }
   });
 }
@@ -137,7 +152,7 @@ function renderList() {
   if (!rows.length) add(list, 'p', needle ? 'No matching logins.' : 'Your logins will appear here.', 'note');
   for (const row of rows) {
     const button = add(list, 'button', row.title);
-    add(button, 'span', row.origin);
+    add(button, 'span', row.conflict ? 'Conflict · choose a version' : row.origin);
     button.setAttribute('aria-pressed', String(selected === row.id && !editor));
     button.onclick = () => { editor = null; selected = row.id; render(); };
   }
@@ -211,38 +226,85 @@ function renderEditor() {
     } finally { submit.disabled = false; }
   });
 }
+function updateSync() {
+  if (!model) return;
+  const { sync } = model;
+  const peerText = sync.peers + (sync.peers === 1 ? ' peer' : ' peers');
+  const conflicts = model.catalogue.filter(item => item.conflict).length;
+  const state = {
+    paused: 'Offline · sync paused',
+    offline: 'Offline · saved on this device',
+    checking: 'Checking nearby peers…',
+    pending: 'Syncing · waiting for ' + (sync.peers - sync.matched) + ' of ' + peerText,
+    synced: 'Synced with ' + peerText,
+    unavailable: 'Offline · discovery unavailable'
+  }[sync.mode];
+  $('sync-badge').textContent = state + (conflicts ? ' · ' + conflicts + (conflicts === 1 ? ' conflict' : ' conflicts') : '');
+  if (!$('lan-status')) return;
+  $('lan-status').textContent = state;
+  $('last-sync').textContent = sync.lastSync ? 'Last synced at ' + new Date(sync.lastSync).toLocaleTimeString() : 'No completed sync in this session.';
+  const stopped = ['paused', 'unavailable'].includes(sync.mode);
+  $('start-sync').hidden = !stopped;
+  $('stop-sync').hidden = $('sync-now').hidden = stopped;
+}
+
+function renderConflicts(row) {
+  template($('detail'), 'conflicts');
+  $('conflict-title').textContent = row.title;
+  const container = $('conflict-versions');
+  const version = renderVersion;
+  void act(async () => {
+    const candidates = await call('variants', row.id);
+    if (version !== renderVersion) return;
+    for (const [index, candidate] of candidates.entries()) {
+      const choice = add(container, 'section', '', 'inset');
+      add(choice, 'h3', 'Version ' + (index + 1) + (candidate.deleted ? ' · deleted' : ' · ' + candidate.title));
+      if (!candidate.deleted) {
+        add(choice, 'p', candidate.origin + ' · ' + (candidate.username || 'No username'), 'note');
+        const password = add(choice, 'code', '••••••••••••');
+        password.dataset.conflictSecret = '';
+        const actions = add(choice, 'div', '', 'buttons');
+        add(actions, 'button', 'Reveal version ' + (index + 1), 'outline').onclick = act(async () => {
+          if (password.textContent !== '••••••••••••') return clearReveal();
+          const screen = renderVersion;
+          const secret = await call('reveal', row.id, candidate.version);
+          if (screen !== renderVersion) return;
+          clearReveal();
+          password.textContent = secret;
+          revealTimer = setTimeout(clearReveal, 20_000);
+        });
+      }
+      add(choice, 'button', candidate.deleted ? 'Keep deletion' : 'Keep version ' + (index + 1)).onclick = act(async () => {
+        await call('resolve', row.id, candidate.version, row.stamp);
+        await refresh(false);
+      });
+    }
+  })();
+}
+
 function renderDevices() {
   template(app, 'devices');
-  const { sync, bridgeReady, bridgeError } = model;
-  $('lan-status').textContent = sync.ip ? 'Listening on ' + sync.ip + ' while unlocked.' :
-    sync.addresses.length ? 'Off. Choose the address on the same Wi-Fi as your phone.' : 'No private IPv4 address found.';
-  $('address-label').hidden = Boolean(sync.ip) || !sync.addresses.length;
-  for (const ip of sync.addresses) add($('addresses'), 'option', ip).value = ip;
-  $('start-sync').hidden = Boolean(sync.ip) || !sync.addresses.length;
-  $('stop-sync').hidden = $('invite').hidden = !sync.ip;
-  $('start-sync').onclick = act(async () => { await call('startSync', $('addresses').value); await refresh(); });
-  $('stop-sync').onclick = act(async () => { clearQr(); await call('stopSync'); await refresh(); });
+  updateSync();
+  const { bridgeReady, bridgeError } = model;
+  $('start-sync').onclick = act(async () => { await call('startSync'); await refresh(); });
+  $('stop-sync').onclick = act(async () => { await call('stopSync'); await refresh(); });
+  $('sync-now').onclick = act(async () => { await call('syncNow'); await refresh(); });
+  $('copy-setup').onclick = act(async () => {
+    await call('copySetup');
+    if ($('setup-note')) $('setup-note').textContent = 'Setup code copied. Treat it like your security key.';
+  });
   $('invite').onclick = act(async () => {
-    clearQr(false);
+    clearQr();
     const version = renderVersion;
     const { image, expires } = await call('invite');
-    if (version !== renderVersion) { void call('cancelInvite'); return; }
-    qrVisible = true;
-    $('qr').dataset.peers = String(model.sync.peers.length);
+    if (version !== renderVersion) return;
     $('qr-image').src = image;
     $('qr').hidden = false;
-    qrTimer = setTimeout(() => clearQr(), Math.max(expires - Date.now(), 0));
+    qrTimer = setTimeout(clearQr, Math.max(expires - Date.now(), 0));
   });
-  $('hide-qr').onclick = () => clearQr();
+  $('hide-qr').onclick = clearQr;
   $('bridge-status').textContent = bridgeReady ? 'The local Chrome bridge is ready.' :
     bridgeError || 'The Chrome bridge is unavailable in this desktop session.';
-  for (const peer of sync.peers) {
-    const line = add($('peer-list'), 'div', '', 'peer');
-    add(line, 'span', 'Device ' + peer.id.slice(0, 6) + ' · ' + new Date(peer.added).toLocaleDateString());
-    const revoke = add(line, 'button', 'Revoke', 'danger');
-    revoke.onclick = act(async () => { await call('revoke', peer.id); await refresh(); });
-  }
-  if (!sync.peers.length) add($('peer-list'), 'p', 'No paired devices.', 'note');
   $('recovery').onclick = act(async () => {
     if (!$('recovery-value').hidden) return clearReveal();
     const version = renderVersion;

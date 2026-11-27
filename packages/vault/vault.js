@@ -86,7 +86,7 @@ async function derive(passphrase, securityKey, salt, vaultId, creating = false) 
     pass.fill(0);
     key.fill(0);
     root = await argon2idAsync(mixed, salt, KDF);
-    return Object.fromEntries(['catalogue', 'password', 'file', 'enrol'].map(label =>
+    return Object.fromEntries(['catalogue', 'password', 'file', 'journal', 'transport'].map(label =>
       [label, hkdf(sha256, root, vaultId, name(label), 32)]));
   } finally {
     for (const bytes of [pass, key, mixed, root]) bytes?.fill(0);
@@ -153,8 +153,6 @@ function unbox(key, aad, ciphertext) {
     plaintext.fill(0);
   }
 }
-
-const same = (a, b) => a === b || Boolean(a && b && equal(a.catalogue, b.catalogue) && equal(a.password, b.password));
 
 // The catalogue and password boxes are separate. Only reveal() opens a password box.
 export class Vault {
@@ -290,33 +288,56 @@ export class Vault {
     return this.#serialize(records);
   }
 
-  merge(base, remote, resolution) {
+  // Replica storage uses the same authenticated, independently sealed record
+  // boxes. The empty snapshot only carries the vault's authenticated header.
+  bootstrap() { return this.#serialize(new Map()); }
+
+  encryptedRecords() {
     this.#requireOpen();
-    if (resolution !== undefined && !['local', 'remote'].includes(resolution)) throw new Error('Invalid resolution.');
-    const before = this.#read(base);
-    const incoming = this.#read(remote);
-    const records = new Map();
-    const conflicts = [];
-    for (const id of new Set([...before.keys(), ...this.#records.keys(), ...incoming.keys()])) {
-      const old = before.get(id);
-      const mine = this.#records.get(id);
-      const theirs = incoming.get(id);
-      let record;
-      if (same(mine, theirs) || same(theirs, old)) record = mine;
-      else if (same(mine, old)) record = theirs;
-      else {
-        conflicts.push(id);
-        record = resolution === 'remote' ? theirs : mine;
-      }
-      if (record) records.set(id, record);
-    }
-    return { conflicts, bytes: conflicts.length && !resolution ? null : this.#serialize(records) };
+    return [...this.#records].map(([id, record]) => ({
+      id, box: this.#serialize(new Map([[id, record]]))
+    }));
   }
 
-  enrolProof(invite) {
+  sealRecord(fields, id) {
     this.#requireOpen();
-    if (!isKey(invite)) throw new Error('Invalid pairing invite.');
-    return bytesToHex(hmac(sha256, this.#keys.enrol, concatBytes(name('invite proof'), hexToBytes(invite))));
+    if (!isId(id)) throw new Error('Invalid record ID.');
+    const meta = normalizedMeta(fields);
+    if (typeof fields.password !== 'string' || fields.password.length < 1 || fields.password.length > 1024) {
+      throw new Error('Enter a password of 1–1024 characters.');
+    }
+    return this.#serialize(new Map([[id, {
+      catalogue: box(this.#random, this.#keys.catalogue, this.#aad('catalogue', id), meta),
+      password: box(this.#random, this.#keys.password, this.#aad('password', id), fields.password)
+    }]]));
+  }
+
+  readRecord(bytes, id, mode = 'validate') {
+    const records = this.#read(bytes);
+    const record = records.get(id);
+    if (records.size !== 1 || !record) throw new Error('Invalid encrypted record.');
+    if (mode === 'catalogue') {
+      return normalizedMeta(unbox(this.#keys.catalogue, this.#aad('catalogue', id), record.catalogue));
+    }
+    if (mode === 'password') return unbox(this.#keys.password, this.#aad('password', id), record.password);
+  }
+
+  journalTag(domain, bytes) {
+    this.#requireOpen();
+    return hmac(sha256, this.#keys.journal, concatBytes(name(domain), bytes));
+  }
+
+  wrapPacket(domain, bytes, binding = new Uint8Array()) {
+    this.#requireOpen();
+    const nonce = checkedRandom(this.#random, NONCE);
+    return concatBytes(nonce, xchacha20poly1305(this.#keys.transport, nonce, concatBytes(name(domain), binding)).encrypt(bytes));
+  }
+
+  unwrapPacket(domain, packet, binding = new Uint8Array()) {
+    this.#requireOpen();
+    if (!(packet instanceof Uint8Array) || packet.length < NONCE + 16) throw new Error('Invalid packet.');
+    return xchacha20poly1305(this.#keys.transport, packet.subarray(0, NONCE), concatBytes(name(domain), binding))
+      .decrypt(packet.subarray(NONCE));
   }
 
   close() {

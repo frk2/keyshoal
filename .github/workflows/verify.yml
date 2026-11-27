@@ -31,6 +31,7 @@ jobs:
       - run: KEYSHOAL_REQUIRE_LAN=1 npm test
       - run: xvfb-run -a npm run test:desktop
       - run: xvfb-run -a -s '-screen 0 1440x1000x24' npm run test:chrome
+      - run: xvfb-run -a -s '-screen 0 1440x1000x24' npm run test:sync
       - run: npm run package:linux
       - name: Start packaged app with the sandbox enabled
         run: |

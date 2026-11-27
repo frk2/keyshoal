@@ -1,7 +1,7 @@
 Pod::Spec.new do |s|
   s.name             = 'KeyshoalNative'
   s.version          = '0.1.0'
-  s.summary          = 'Private Keyshoal vault storage and pinned LAN sync'
+  s.summary          = 'Private Keyshoal vault storage and Bonjour peer sync'
   s.homepage         = 'https://github.com/frk2/keyshoal'
   s.author           = 'Keyshoal contributors'
   s.license          = { :type => 'UNLICENSED' }

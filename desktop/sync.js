@@ -1,215 +1,193 @@
-import 'reflect-metadata';
-import * as x509 from '@peculiar/x509';
-import { createHash, randomBytes, timingSafeEqual, webcrypto, X509Certificate } from 'node:crypto';
-import { createServer } from 'node:https';
-import { networkInterfaces } from 'node:os';
-import path from 'node:path';
-import { isKey, MAX_VAULT } from '@keyshoal/vault';
-import { encodeInvite, INVITE_MS, isPrivateIPv4, PORT } from '@keyshoal/vault/protocol';
-import { readPrivate, writePrivate } from './files.js';
+import { connect, createServer, isIP } from 'node:net';
+import { randomBytes } from 'node:crypto';
+import { Bonjour } from 'bonjour-service';
+import { BONJOUR_TYPE, MAX_PACKET, MAX_INVENTORY_PACKET } from '@keyshoal/vault/protocol';
 
-const WEEK = 7 * 24 * 60 * 60 * 1000;
-const TOKEN = /^(Invite|Device) ([a-f0-9]{64})$/;
-const hash = bytes => createHash('sha256').update(bytes).digest('hex');
-const secret = () => randomBytes(32).toString('hex');
-const options = { minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3' };
-const sameSecret = (a, b) => isKey(a) && isKey(b) && timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
+const TIMEOUT = 6500;
+const TICK = 2800;
+const localName = /^ks-[a-f0-9]{24}$/;
+const offline = { mode: 'offline', peers: 0, matched: 0 };
 
-export const addresses = () => [...new Set(Object.values(networkInterfaces()).flat().filter(
-  info => !info.internal && info.family === 'IPv4' && isPrivateIPv4(info.address)
-).map(info => info.address))].sort();
-
-async function identity(dir, ip) {
-  const file = path.join(dir, 'tls-identity.json');
-  const saved = readPrivate(file, 16_384);
-  if (saved) {
-    const old = JSON.parse(saved);
-    const cert = new X509Certificate(old.cert);
-    if (old.ip === ip && Date.parse(cert.validTo) - Date.now() > WEEK) {
-      return { cert: old.cert, key: old.key, fingerprint: hash(cert.raw) };
-    }
+export function localAddress(address, inbound = false) {
+  if (typeof address !== 'string') return false;
+  const ip = address.replace(/^::ffff:/i, '');
+  if (isIP(ip) === 4) {
+    const [a, b] = ip.split('.').map(Number);
+    return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) || (a === 169 && b === 254);
   }
-  const algo = { name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256' };
-  const pair = await webcrypto.subtle.generateKey(algo, true, ['sign', 'verify']);
-  const certificate = await x509.X509CertificateGenerator.createSelfSigned({
-    serialNumber: '01' + randomBytes(16).toString('hex'),
-    name: 'CN=Keyshoal LAN sync',
-    notBefore: new Date(Date.now() - 12 * 60 * 60 * 1000),
-    notAfter: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
-    signingAlgorithm: algo,
-    keys: pair,
-    extensions: [
-      new x509.SubjectAlternativeNameExtension([{ type: 'ip', value: ip }]),
-      new x509.BasicConstraintsExtension(false, undefined, true),
-      new x509.KeyUsagesExtension(x509.KeyUsageFlags.digitalSignature, true),
-      new x509.ExtendedKeyUsageExtension([x509.ExtendedKeyUsage.serverAuth])
-    ]
-  }, webcrypto);
-  const cert = certificate.toString('pem');
-  const key = x509.PemConverter.encode(await webcrypto.subtle.exportKey('pkcs8', pair.privateKey), 'PRIVATE KEY');
-  writePrivate(file, JSON.stringify({ ip, cert, key }));
-  return { cert, key, fingerprint: hash(Buffer.from(certificate.rawData)) };
+  return isIP(ip) === 6 && (ip === '::1' || /^f[cd]/i.test(ip) ||
+    (/^fe[89ab][0-9a-f]:/i.test(ip) && (inbound || ip.includes('%'))));
 }
 
-function respond(res, status, body, headers = {}) {
-  res.writeHead(status, { 'Cache-Control': 'no-store', 'Content-Type': 'application/octet-stream', ...headers });
-  res.end(body);
+function sendFrame(socket, packet, end = false) {
+  const header = Buffer.alloc(4);
+  header.writeUInt32BE(packet.length);
+  const frame = Buffer.concat([header, packet]);
+  if (end) socket.end(frame);
+  else socket.write(frame);
 }
 
-async function readBody(req) {
-  if (!/^\d{1,7}$/.test(req.headers['content-length'] ?? '')) throw new Error('Missing content length.');
-  const size = Number(req.headers['content-length']);
-  if (size < 1 || size > MAX_VAULT || req.headers['content-type'] !== 'application/octet-stream') {
-    throw new Error('Invalid body.');
-  }
-  const chunks = [];
-  let length = 0;
-  for await (const chunk of req) {
-    length += chunk.length;
-    if (length > size) throw new Error('Invalid body length.');
-    chunks.push(chunk);
-  }
-  if (size !== length) throw new Error('Invalid body length.');
-  return Buffer.concat(chunks, length);
+function readFrame(socket, limit) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let length = 0, expected;
+    socket.on('data', chunk => {
+      length += chunk.length;
+      if (length > limit + 4) { socket.destroy(); return reject(new Error('Oversized peer frame.')); }
+      chunks.push(chunk);
+      if (expected === undefined && length >= 4) {
+        expected = Buffer.concat(chunks, length).readUInt32BE();
+        if (expected < 40 || expected > limit) { socket.destroy(); return reject(new Error('Invalid peer frame.')); }
+      }
+      if (expected !== undefined && length >= expected + 4) {
+        if (length !== expected + 4) { socket.destroy(); return reject(new Error('Unexpected peer data.')); }
+        socket.pause();
+        resolve(Buffer.concat(chunks, length).subarray(4));
+      }
+    });
+    socket.once('error', reject);
+    socket.once('close', () => reject(new Error('Peer disconnected.')));
+    socket.setTimeout(TIMEOUT, () => socket.destroy(new Error('Peer timed out.')));
+  });
 }
 
-export class LanHub {
-  #dir;
-  #getVault;
+export async function exchange(address, port, inventory, sockets = new Set()) {
+  if (!localAddress(address) || !Number.isInteger(port) || port < 1 || port > 65_535) throw new Error('Invalid local peer.');
+  const socket = connect({ host: address, port });
+  sockets.add(socket);
+  socket.once('close', () => sockets.delete(socket));
+  try {
+    const response = readFrame(socket, MAX_PACKET);
+    sendFrame(socket, inventory);
+    return await response;
+  } finally { socket.destroy(); }
+}
+
+export class PeerNetwork {
+  #current;
   #commit;
-  #server;
-  #sockets = new Set();
-  #listeners = new Set();
-  #generation = 0;
-  #identity;
-  #ip;
-  #invite;
-  #peers;
-  #port;
-  constructor(dir, getVault, commit, port = PORT) {
-    this.#dir = dir;
-    this.#getVault = getVault;
+  #notify;
+  #round;
+  #status = { mode: 'paused', peers: 0, matched: 0, lastSync: null };
+  constructor(current, commit, notify = () => {}) {
+    this.#current = current;
     this.#commit = commit;
-    this.#port = port;
-    this.#peers = JSON.parse(readPrivate(this.#peerFile(), 64_000) ?? '[]');
+    this.#notify = notify;
   }
+  status() { return { ...this.#status }; }
 
-  #peerFile() { return path.join(this.#dir, 'paired-devices.json'); }
-  #setPeers(peers) {
-    writePrivate(this.#peerFile(), JSON.stringify(peers));
-    this.#peers = peers;
-  }
-  onPeer(listener) {
-    this.#listeners.add(listener);
-    return () => this.#listeners.delete(listener);
-  }
-  status() {
-    return { ip: this.#ip ?? null, addresses: addresses(), peers: this.#peers.map(({ id, added }) => ({ id, added })) };
-  }
-  revoke(id) {
-    this.#setPeers(this.#peers.filter(peer => peer.id !== id));
-  }
-
-  async start(ip) {
-    if (!addresses().includes(ip)) throw new Error('Choose an active private IPv4 address from this computer.');
-    if (!this.#getVault()) throw new Error('Unlock your vault first.');
-    if (this.#server && this.#ip === ip) return this.status();
-    this.stop();
-    const generation = this.#generation;
-    const credentials = await identity(this.#dir, ip);
-    if (generation !== this.#generation || !this.#getVault()) throw new Error('LAN sync start cancelled.');
-    const server = createServer({
-      ...options, key: credentials.key, cert: credentials.cert,
-      maxHeaderSize: 4096, headersTimeout: 5000, requestTimeout: 12_000, keepAliveTimeout: 1000
-    }, (req, res) => {
-      this.#handle(req, res, generation).catch(() => {
-        if (!res.headersSent && !res.destroyed) respond(res, 400);
-      });
-    });
-    server.maxConnections = 16;
-    server.timeout = 12_000;
-    server.on('connection', socket => {
-      this.#sockets.add(socket);
-      socket.once('close', () => this.#sockets.delete(socket));
-    });
-    this.#server = server;
-    try {
-      await new Promise((resolve, reject) => {
-        server.once('error', reject);
-        server.listen(this.#port, ip, () => {
-          server.removeListener('error', reject);
-          server.on('error', () => { if (this.#server === server) this.stop(); });
-          resolve();
-        });
-        server.once('close', () => reject(new Error('LAN sync start cancelled.')));
-      });
-    } catch (error) {
-      if (this.#server === server) this.stop();
-      throw error;
+  #set(fields) {
+    if (Object.entries(fields).some(([k, value]) => this.#status[k] !== value)) {
+      this.#status = { ...this.#status, ...fields };
+      this.#notify();
     }
-    if (generation !== this.#generation) throw new Error('LAN sync start cancelled.');
-    this.#identity = credentials.fingerprint;
-    this.#ip = ip;
-    return this.status();
   }
 
   stop() {
-    this.#generation++;
-    this.#invite = undefined;
-    this.#ip = undefined;
-    this.#identity = undefined;
-    this.#server?.close();
-    this.#server = undefined;
-    for (const socket of this.#sockets) socket.destroy();
-    this.#sockets.clear();
+    const round = this.#round;
+    this.#round = undefined;
+    if (round) {
+      clearInterval(round.timer);
+      for (const socket of round.sockets) socket.destroy();
+      round.server?.close();
+      round.browser?.stop();
+      if (round.ad) {
+        const fallback = setTimeout(() => round.bonjour?.destroy(), 900).unref();
+        round.ad.stop(() => { clearTimeout(fallback); round.bonjour?.destroy(); });
+      } else round.bonjour?.destroy();
+    }
+    this.#set({ mode: 'paused', peers: 0, matched: 0 });
   }
 
-  invite(key) {
-    if (!this.#ip || !this.#getVault()) throw new Error('Start LAN sync first.');
-    if (this.#peers.length >= 32) throw new Error('Revoke a device before pairing another.');
-    const token = secret();
-    const expires = Date.now() + INVITE_MS;
-    this.#invite = { token, expires };
-    return { expires, qr: encodeInvite({ ip: this.#ip, fingerprint: this.#identity, invite: token, key }) };
+  async start() {
+    if (this.#round || !this.#current()) return;
+    const id = 'ks-' + randomBytes(12).toString('hex');
+    const round = { id, sockets: new Set(), neighbors: new Map(), busy: false, cursor: 0 };
+    this.#round = round;
+    this.#set(offline);
+    try {
+      round.server = createServer(socket => {
+        if (!localAddress(socket.remoteAddress, true) || this.#round !== round) return socket.destroy();
+        round.sockets.add(socket);
+        socket.once('close', () => round.sockets.delete(socket));
+        readFrame(socket, MAX_INVENTORY_PACKET).then(inventory => {
+          const replica = this.#current();
+          if (!replica || this.#round !== round) return socket.destroy();
+          sendFrame(socket, replica.answer(inventory), true);
+        }).catch(() => socket.destroy());
+      });
+      round.server.maxConnections = 12;
+      await new Promise((resolve, reject) => {
+        round.server.once('error', reject);
+        round.server.once('close', resolve);
+        round.server.listen({ host: '::', port: 0 }, resolve);
+      });
+      if (this.#round !== round) return;
+      round.bonjour = new Bonjour({}, () => {
+        if (this.#round === round) { this.stop(); this.#set({ mode: 'unavailable' }); }
+      });
+      round.ad = round.bonjour.publish({ name: id, type: BONJOUR_TYPE, host: id + '.local', port: round.server.address().port });
+      round.ad.on('error', () => {
+        if (this.#round === round) { this.stop(); this.#set({ mode: 'unavailable' }); }
+      });
+      round.browser = round.bonjour.find({ type: BONJOUR_TYPE }, service => {
+        if (this.#round !== round || service.name === id || !localName.test(service.name) ||
+            round.neighbors.size >= 24) return;
+        const addresses = (service.addresses ?? []).filter(address => localAddress(address)).sort((a, b) => Number(isIP(b) === 4) - Number(isIP(a) === 4));
+        if (addresses.length) {
+          round.neighbors.set(service.name, { addresses: addresses.slice(0, 3), port: service.port });
+          void this.syncNow();
+        }
+      });
+      round.browser.on('down', service => round.neighbors.delete(service.name));
+      round.timer = setInterval(() => {
+        round.browser.update();
+        void this.syncNow();
+      }, TICK);
+    } catch {
+      if (this.#round === round) { this.stop(); this.#set({ mode: 'unavailable' }); }
+    }
   }
 
-  cancelInvite() { this.#invite = undefined; }
+  async syncNow() {
+    const round = this.#round;
+    const replica = this.#current();
+    if (!round || !replica || round.busy) return;
+    const all = [...round.neighbors.values()];
+    const candidates = [];
+    for (let i = 0; i < Math.min(all.length, 8); i++) candidates.push(all[(round.cursor + i) % all.length]);
+    if (all.length) round.cursor = (round.cursor + candidates.length) % all.length;
+    if (!candidates.length) { this.#set(offline); return; }
+    round.busy = true;
+    if (!this.#status.peers) this.#set({ mode: 'checking' });
+    try {
+      const results = await Promise.allSettled(candidates.map(async peer => {
+        const request = replica.request();
+        let reply;
+        for (const address of peer.addresses) {
+          try { reply = await exchange(address, peer.port, request, round.sockets); break; }
+          catch { if (this.#round !== round) return null; }
+        }
+        if (!reply || this.#round !== round || this.#current() !== replica) return null;
+        const { bytes, digest } = replica.integrate(request, reply);
+        if (bytes) this.#commit(bytes);
+        return digest;
+      }));
+      if (this.#round !== round || this.#current() !== replica) return;
+      const digests = results.flatMap(result => result.status === 'fulfilled' && result.value ? [result.value] : []);
+      const digest = replica.digest();
+      const matched = digests.filter(remote => remote === digest).length;
+      const mode = !digests.length ? 'offline' : matched === digests.length ? 'synced' : 'pending';
+      const last = this.#status.lastSync;
+      this.#set({
+        mode, peers: digests.length, matched,
+        lastSync: mode === 'synced' && (this.#status.mode !== 'synced' || last === null) ? Date.now() : last
+      });
+    } finally { round.busy = false; }
+  }
 
-  async #handle(req, res, generation) {
-    const vault = this.#getVault();
-    if (!vault || generation !== this.#generation) return respond(res, 503);
-    if (!['/v1/vault', '/v1/enrol'].includes(req.url)) return respond(res, 404);
-    const authorization = TOKEN.exec(req.headers.authorization ?? '');
-    if (!authorization) return respond(res, 401);
-    const [, kind, token] = authorization;
-    if (kind === 'Invite') {
-      if (!sameSecret(token, this.#invite?.token) || Date.now() >= this.#invite.expires) return respond(res, 401);
-      if (req.method === 'GET' && req.url === '/v1/vault') return respond(res, 200, vault.bytes());
-      if (req.method !== 'POST' || req.url !== '/v1/enrol') return respond(res, 405);
-      if (!sameSecret(req.headers['x-keyshoal-proof'], vault.enrolProof(token))) return respond(res, 401);
-      const device = secret();
-      const peer = { id: randomBytes(16).toString('hex'), added: Date.now(), tokenHash: hash(device) };
-      this.#setPeers([...this.#peers, peer]);
-      this.#invite = undefined;
-      for (const listener of this.#listeners) listener();
-      return respond(res, 201, undefined, { 'X-Keyshoal-Device': device });
-    }
-
-    const tokenHash = hash(token);
-    const peer = this.#peers.find(item => sameSecret(tokenHash, item.tokenHash));
-    if (!peer) return respond(res, 401);
-    if (req.url !== '/v1/vault') return respond(res, 404);
-    if (req.method === 'GET') return respond(res, 200, vault.bytes());
-    if (req.method !== 'PUT') return respond(res, 405);
-    const match = req.headers['if-match'];
-    if (typeof match !== 'string' || !/^"[a-f0-9]{64}"$/.test(match)) return respond(res, 428);
-    const bytes = await readBody(req);
-    if (generation !== this.#generation || vault !== this.#getVault() || !this.#peers.includes(peer)) {
-      return respond(res, 401);
-    }
-    if (match !== '"' + vault.revision() + '"') return respond(res, 412);
-    try { vault.validate(bytes); } catch { return respond(res, 422); }
-    this.#commit(bytes);
-    return respond(res, 204);
+  changed() {
+    if (this.#round && this.#status.peers) this.#set({ mode: 'pending', matched: 0 });
   }
 }

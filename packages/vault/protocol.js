@@ -1,47 +1,36 @@
-import { isKey, MAX_VAULT } from './vault.js';
+import { bytesToHex, hexToBytes, isKey } from './vault.js';
 
-export const PORT = 46321;
-export const INVITE_MS = 120_000;
-export const MAX_MOBILE_STORE = 2 * MAX_VAULT + 4;
+export const BONJOUR_TYPE = 'keyshoal-v2';
+export const MAX_JOURNAL = 8 * 1024 * 1024;
+export const MAX_PACKET = MAX_JOURNAL + 64;
+export const MAX_EVENTS = 8192;
+export const MAX_INVENTORY_PACKET = 4 + 32 * MAX_EVENTS + 40;
+export const MAX_RECORD_BOX = 32_768;
+export const BOOTSTRAP_BYTES = 76;
+export const SETUP_PREFIX = 'keyshoal-v2:';
 
-export function isPrivateIPv4(value) {
-  if (typeof value !== 'string' || !/^(0|[1-9]\d{0,2})(\.(0|[1-9]\d{0,2})){3}$/.test(value)) return false;
-  const [a, b, c, d] = value.split('.').map(Number);
-  return [a, b, c, d].every(n => n < 256) &&
-    (a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168));
+export function encodeSetup(key, bootstrap) {
+  if (!isKey(key) || bootstrap?.length !== BOOTSTRAP_BYTES) throw new Error('Invalid Keyshoal setup data.');
+  return SETUP_PREFIX + key + bytesToHex(bootstrap);
 }
 
-export function decodeInvite(qr) {
-  if (typeof qr !== 'string' || qr.length > 600 || !qr.startsWith('keyshoal-pair-v1:')) {
-    throw new Error('This is not a Keyshoal pairing code.');
+export function decodeSetup(text) {
+  if (typeof text !== 'string' || text.length > 240) throw new Error('Invalid Keyshoal setup code.');
+  const clean = text.trim();
+  if (!clean.startsWith(SETUP_PREFIX) || clean.length !== SETUP_PREFIX.length + 64 + BOOTSTRAP_BYTES * 2) {
+    throw new Error('This is not a Keyshoal peer setup code.');
   }
-  const { ip, fingerprint, invite, key } = JSON.parse(qr.slice('keyshoal-pair-v1:'.length));
-  if (!isPrivateIPv4(ip) || !isKey(fingerprint) || !isKey(invite) || !isKey(key)) {
-    throw new Error('Invalid Keyshoal pairing code.');
-  }
-  return { ip, fingerprint, invite, key };
+  const key = clean.slice(SETUP_PREFIX.length, SETUP_PREFIX.length + 64);
+  const hex = clean.slice(SETUP_PREFIX.length + 64);
+  if (!isKey(key) || !/^[0-9a-f]+$/.test(hex)) throw new Error('Invalid Keyshoal setup code.');
+  return { key, bootstrap: hexToBytes(hex) };
 }
 
-export function encodeInvite(fields) {
-  const text = 'keyshoal-pair-v1:' + JSON.stringify(fields);
-  decodeInvite(text);
-  return text;
-}
-
-export function packMobile(local, base) {
-  if (local.length > MAX_VAULT || base.length > MAX_VAULT) throw new Error('Vault is too large.');
-  const data = new Uint8Array(4 + local.length + base.length);
-  new DataView(data.buffer).setUint32(0, local.length);
-  data.set(local, 4);
-  data.set(base, 4 + local.length);
-  return data;
-}
-
-export function unpackMobile(data) {
-  if (data.length <= 4 || data.length > MAX_MOBILE_STORE) throw new Error('Damaged local vault.');
+// Only for reading the earlier preview's local mobile snapshot. No peer role
+// or connection settings from that preview survive migration.
+export function legacyMobileLocal(data) {
+  if (data.length <= 4) throw new Error('Damaged local vault.');
   const size = new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(0);
-  if (!size || size > MAX_VAULT || size >= data.length - 4 || data.length - 4 - size > MAX_VAULT) {
-    throw new Error('Damaged local vault.');
-  }
-  return { local: data.subarray(4, 4 + size), base: data.subarray(4 + size) };
+  if (size < BOOTSTRAP_BYTES || size > data.length - 4) throw new Error('Damaged local vault.');
+  return data.subarray(4, 4 + size);
 }
