@@ -5,6 +5,7 @@ import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import assert from 'node:assert/strict';
+import { PNG } from 'pngjs';
 
 export const PASS = 'Synthetic automation fixture only';
 export const executable = process.env.KEYSHOAL_TEST_PACKAGE && path.resolve(process.env.KEYSHOAL_TEST_PACKAGE);
@@ -124,6 +125,24 @@ export async function evidence(page, file, app) {
       Array.from(document.querySelectorAll('#secret, [data-conflict-secret]')).every(node => node.textContent === masked);
   });
   assert.ok(safe, 'Refusing to capture displayed security material.');
+  if (!windows && app.pid) {
+    try {
+      // Use the packaged window's Chromium surface. Its DOM can be ready
+      // before Electron's first native X11 window becomes visible.
+      const picture = await page.screenshot({ timeout: 3500 });
+      const { data } = PNG.sync.read(picture);
+      const first = data.readUInt32LE(0);
+      let different = 0;
+      for (let i = 4; i < data.length && different <= 500; i += 4) {
+        if (data.readUInt32LE(i) !== first) different++;
+      }
+      assert.ok(different > 500, 'The window surface appears blank.');
+      writeFileSync(filename, picture);
+      return;
+    } catch {
+      // Some Linux software-rendered displays need native X11 capture.
+    }
+  }
   if (windows) {
     try { return await page.screenshot({ path: filename }); }
     catch {
@@ -145,13 +164,14 @@ export async function evidence(page, file, app) {
     }
   }
   const xdotool = (args) => execFileSync(process.env.KEYSHOAL_XDOTOOL || 'xdotool', args, { encoding: 'utf8', timeout: 5000 });
-  const handle = app.pid ? xdotool(['search', '--sync', '--onlyvisible', '--all', '--pid', String(app.pid), '--name', '^Keyshoal$']).trim().split('\n')[0] :
+  const handle = app.pid ? xdotool(['search', '--sync', '--all', '--pid', String(app.pid), '--name', '^Keyshoal$']).trim().split('\n')[0] :
     await app.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows()[0];
     if (!window.isVisible()) window.show();
     window.focus();
     return window.getNativeWindowHandle().readUInt32LE();
   });
+  if (app.pid) xdotool(['windowmap', handle]);
   xdotool(['windowraise', String(handle)]);
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   // Capture only the app window on the isolated X11 display. Chromium's
