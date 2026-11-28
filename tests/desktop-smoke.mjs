@@ -22,7 +22,7 @@ try {
     assert.equal(binary.includes(text), false);
   }
   if (process.platform === 'win32') {
-    execFileSync('powershell.exe', ['-NoProfile', '-File', path.resolve('tests/check-windows-vault-acl.ps1'), file],
+    execFileSync(process.env.KEYSHOAL_TEST_POWERSHELL || 'powershell.exe', ['-NoProfile', '-File', path.resolve('tests/check-windows-vault-acl.ps1'), file],
       { windowsHide: true, stdio: 'inherit', timeout: 12000 });
   } else assert.equal(statSync(file).mode & 0o777, 0o600);
   await page.getByRole('button', { name: 'Devices' }).click();

@@ -73,7 +73,7 @@ try {
     const helper = path.join(dir, 'install-chrome-host.ps1');
     cpSync('build/keyshoal-chrome-host.exe', path.join(dir, 'keyshoal-chrome-host.exe'));
     cpSync('scripts/install-chrome-host.ps1', helper);
-    const runInstaller = (...args) => execFileSync('powershell.exe', [
+    const runInstaller = (...args) => execFileSync(process.env.KEYSHOAL_TEST_POWERSHELL || 'powershell.exe', [
       '-NoProfile', '-File', helper, '-ManifestDirectory', dir, ...args
     ], { env: run.env, windowsHide: true, timeout: 12000, stdio: 'ignore' });
     uninstall = () => runInstaller('-Uninstall');
