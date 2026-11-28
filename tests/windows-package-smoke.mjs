@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -59,6 +59,10 @@ try {
   const malformedOrigin = await runHost(['https://example.test/'], frame);
   assert.notEqual(malformedOrigin.code, 0);
   assert.equal(malformedOrigin.data.length, 0);
+  const shared = path.join(temp, 'Existing non-Keyshoal directory');
+  mkdirSync(shared);
+  const rejected = await runHost(['--private-directory', shared]);
+  assert.equal(rejected.code, 1, 'Must not alter permissions on an existing unprotected directory.');
   const duplicate = await runHost(['--broker', String(process.pid)]);
   assert.equal(duplicate.code, 1);
   assert.equal(duplicate.data.length, 0);

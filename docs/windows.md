@@ -5,7 +5,7 @@ Use the Windows x64 artifact from the current pull request’s **Build and verif
 ## Install
 
 1. Download the artifact, verify the SHA-256 of the nested `keyshoal-win32-x64.zip` against `SHA256SUMS` with PowerShell's `Get-FileHash`, and extract the entire ZIP to a folder you own. Keep the adjacent DLLs, `resources` and `chrome` folders in place.
-2. Run `keyshoal.exe` as your normal account. The app stores its encrypted journal in `%LOCALAPPDATA%\Keyshoal\logins.vault`. Its directory has a protected current-user and SYSTEM ACL. Do not run Keyshoal or Chrome as administrator for everyday use.
+2. Run `keyshoal.exe` as your normal account. The app stores its encrypted journal in `%LOCALAPPDATA%\Keyshoal\logins.vault`. Its directory has a protected current-user and SYSTEM ACL. Let Keyshoal create it on first launch before restoring a backup. Do not run Keyshoal or Chrome as administrator for everyday use.
 3. To sync, create or join a vault with a setup code from any replica. When Windows asks about network access, choose only the private network you intend to use. No global firewall rule or cloud account is needed.
 
 ## Connect Chrome

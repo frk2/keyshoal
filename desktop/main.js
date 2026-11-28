@@ -9,7 +9,7 @@ import { decodeSetup, encodeSetup, MAX_JOURNAL } from '@keyshoal/vault/protocol'
 import { privateDirectory, readPrivate, writePrivate } from './files.js';
 import { PeerNetwork } from './sync.js';
 import { answerNative, startBridge } from './bridge.js';
-import { startWindowsBridge, windowsDataDirectory } from './windows.js';
+import { checkWindowsVault, startWindowsBridge, windowsDataDirectory } from './windows.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PAGE = path.join(ROOT, 'index.html');
@@ -87,6 +87,7 @@ async function access(mode, input, secret) {
       next = await Replica.join(setup.bootstrap, input, key, randomBytes);
     } else {
       if (!bytes) throw new Error('Create a vault first.');
+      if (windows) checkWindowsVault(windowsHost, vaultFile);
       next = await Replica.unlock(bytes, input, key, randomBytes);
     }
     if (start !== generation) throw new Error('Unlock cancelled.');

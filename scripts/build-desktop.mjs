@@ -30,6 +30,6 @@ if (process.platform === 'linux') {
   execFileSync(process.env.KEYSHOAL_CC || 'cl.exe', [
     '/nologo', '/TC', '/std:c11', '/W4', '/WX', '/O2', '/MT', '/GS', '/guard:cf',
     '/Fobuild/keyshoal-chrome-host-win.obj', '/Febuild/keyshoal-chrome-host.exe',
-    'desktop/chrome-host-win.c', 'advapi32.lib', '/link', '/DYNAMICBASE', '/NXCOMPAT', '/HIGHENTROPYVA', '/GUARD:CF'
+    'desktop/chrome-host-win.c', '/link', 'advapi32.lib', '/DYNAMICBASE', '/NXCOMPAT', '/HIGHENTROPYVA', '/GUARD:CF'
   ], { stdio: 'inherit' });
 }

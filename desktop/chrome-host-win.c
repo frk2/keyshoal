@@ -41,38 +41,62 @@ static BOOL make_security(PSID sid, BOOL directory, PSECURITY_DESCRIPTOR *descri
         sddl, SDDL_REVISION_1, descriptor, NULL);
 }
 
-static int private_directory(const wchar_t *dir, PSID sid) {
-    int result = 1;
-    PSECURITY_DESCRIPTOR desired = NULL, current = NULL;
-    if (!make_security(sid, TRUE, &desired)) return 1;
-    SECURITY_ATTRIBUTES sa = { sizeof sa, desired, FALSE };
-    if (!CreateDirectoryW(dir, &sa) && GetLastError() != ERROR_ALREADY_EXISTS) {
+static BOOL check_acl(HANDLE handle, PSID sid, BOOL directory) {
+    PSECURITY_DESCRIPTOR descriptor = NULL;
+    PSID owner = NULL;
+    PACL acl = NULL;
+    BOOL accepted = FALSE, has_user = FALSE;
+    if (GetSecurityInfo(handle, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &owner, NULL, &acl, NULL, &descriptor) != ERROR_SUCCESS || !owner || !acl) goto done;
+    if (!EqualSid(owner, sid) && (directory ||
+            (!IsWellKnownSid(owner, WinBuiltinAdministratorsSid) && !IsWellKnownSid(owner, WinLocalSystemSid)))) goto done;
+
+    SECURITY_DESCRIPTOR_CONTROL control;
+    DWORD revision = 0;
+    if (!GetSecurityDescriptorControl(descriptor, &control, &revision) ||
+        (directory && !(control & SE_DACL_PROTECTED))) goto done;
+
+    ACL_SIZE_INFORMATION info;
+    if (!GetAclInformation(acl, &info, (DWORD)sizeof info, AclSizeInformation)) goto done;
+    for (DWORD i = 0; i < info.AceCount; ++i) {
+        void *entry = NULL;
+        if (!GetAce(acl, i, &entry)) goto done;
+        ACCESS_ALLOWED_ACE *ace = (ACCESS_ALLOWED_ACE *)entry;
+        if (ace->Header.AceType != ACCESS_ALLOWED_ACE_TYPE) goto done;
+        PSID trustee = &ace->SidStart;
+        if (EqualSid(trustee, sid)) {
+            BOOL children = (ace->Header.AceFlags & (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)) ==
+                (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE);
+            if (!(ace->Header.AceFlags & INHERIT_ONLY_ACE) && (!directory || children) &&
+                (((ace->Mask & FILE_ALL_ACCESS) == FILE_ALL_ACCESS) || (ace->Mask & GENERIC_ALL))) has_user = TRUE;
+        } else if (!IsWellKnownSid(trustee, WinLocalSystemSid)) goto done;
+    }
+    accepted = has_user;
+done:
+    if (descriptor) LocalFree(descriptor);
+    return accepted;
+}
+
+static int private_path(const wchar_t *path, PSID sid, BOOL directory) {
+    if (directory) {
+        PSECURITY_DESCRIPTOR desired = NULL;
+        if (!make_security(sid, TRUE, &desired)) return 1;
+        SECURITY_ATTRIBUTES sa = { sizeof sa, desired, FALSE };
+        BOOL exists = CreateDirectoryW(path, &sa) || GetLastError() == ERROR_ALREADY_EXISTS;
         LocalFree(desired);
-        return 1;
+        if (!exists) return 1;
     }
-    HANDLE handle = CreateFileW(dir, READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES,
+    HANDLE handle = CreateFileW(path, READ_CONTROL | FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
-        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, NULL);
-    if (handle != INVALID_HANDLE_VALUE) {
-        BY_HANDLE_FILE_INFORMATION info;
-        PSID owner = NULL;
-        BOOL present = FALSE, defaulted = FALSE;
-        PACL dacl = NULL;
-        if (GetFileInformationByHandle(handle, &info) &&
-            (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
-            !(info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
-            GetSecurityInfo(handle, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION,
-                &owner, NULL, NULL, NULL, &current) == ERROR_SUCCESS &&
-            owner && EqualSid(owner, sid) &&
-            GetSecurityDescriptorDacl(desired, &present, &dacl, &defaulted) &&
-            present && dacl &&
-            SetSecurityInfo(handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                            NULL, NULL, dacl, NULL) == ERROR_SUCCESS) result = 0;
-        CloseHandle(handle);
-    }
-    if (current) LocalFree(current);
-    LocalFree(desired);
-    return result;
+        FILE_FLAG_OPEN_REPARSE_POINT | (directory ? FILE_FLAG_BACKUP_SEMANTICS : 0), NULL);
+    if (handle == INVALID_HANDLE_VALUE) return 1;
+    BY_HANDLE_FILE_INFORMATION info;
+    BOOL ok = GetFileInformationByHandle(handle, &info) &&
+        !(info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
+        (!(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == !directory) &&
+        check_acl(handle, sid, directory);
+    CloseHandle(handle);
+    return !ok;
 }
 
 static BOOL pipe_name(PSID sid, wchar_t *name, size_t count, DWORD *session) {
@@ -268,7 +292,10 @@ int wmain(int argc, wchar_t **argv) {
     SidBuffer sid;
     if (!user_sid(GetCurrentProcess(), &sid)) return 1;
     if (argc == 3 && wcscmp(argv[1], L"--private-directory") == 0) {
-        return private_directory(argv[2], sid.bytes);
+        return private_path(argv[2], sid.bytes, TRUE);
+    }
+    if (argc == 3 && wcscmp(argv[1], L"--check-vault") == 0) {
+        return private_path(argv[2], sid.bytes, FALSE);
     }
     wchar_t name[256];
     DWORD session = 0;

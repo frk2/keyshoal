@@ -14,6 +14,14 @@ export function windowsDataDirectory(nativeHost) {
   return dir;
 }
 
+export function checkWindowsVault(nativeHost, file) {
+  try {
+    execFileSync(nativeHost, ['--check-vault', file], { windowsHide: true, stdio: 'ignore', timeout: 8000 });
+  } catch {
+    throw new Error('The Windows vault file is not restricted to your account.');
+  }
+}
+
 export async function startWindowsBridge(nativeHost, answer) {
   const child = spawn(nativeHost, ['--broker', String(process.pid)], {
     stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true
