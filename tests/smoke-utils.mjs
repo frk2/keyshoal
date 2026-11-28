@@ -40,10 +40,11 @@ async function openPackage(dir, env) {
       assert.equal(exit, undefined, 'Packaged Keyshoal exited before its UI was ready.');
       assert.ok(Date.now() < deadline, 'Packaged Keyshoal did not open its test-only loopback CDP listener.');
       try {
-        const value = readFileSync(path.join(dir, 'desktop', 'DevToolsActivePort'), 'utf8').split(/\r?\n/, 1)[0];
-        if (/^\d+$/.test(value)) port = value;
+        const [value, socketPath] = readFileSync(path.join(dir, 'desktop', 'DevToolsActivePort'), 'utf8').split(/\r?\n/);
+        if (/^\d+$/.test(value) && socketPath?.startsWith('/devtools/browser/')) port = value;
       } catch (error) {
-        if (error.code !== 'ENOENT') throw error;
+        // Chromium briefly holds the port file open exclusively on Windows.
+        if (error.code !== 'ENOENT' && !(windows && error.code === 'EBUSY')) throw error;
       }
       if (!port) await delay(75);
     }
