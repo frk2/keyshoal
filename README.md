@@ -2,7 +2,7 @@
 
 A local-first password manager for website logins. Keyshoal generates passwords, keeps them in a two-secret encrypted vault, and syncs encrypted changes between equal replicas over Wi-Fi. Every device keeps the whole vault and works offline. Chrome can fill a login from the unlocked desktop vault.
 
-**Early preview.** The Linux binary and Chrome extension are the first tested clients. The Expo iOS app needs a native build and real-device verification. There is no Windows binary in this release. The application and protocol have not had an independent security review.
+**Early preview.** Portable Linux and Windows x64 packages include the Chrome companion. The Expo iOS build supports the Simulator and still needs an iPhone-signed build and real-device verification. The application and protocol have not had an independent security review.
 
 ## Linux
 
@@ -18,7 +18,11 @@ Extract `dist/keyshoal-linux-x64.tar.xz` (replace `x64` if building on another a
 
 Create a vault, use a strong passphrase, and save the random security key offline **separately**. On desktop you need both to unlock. There is no account, reset service, or recovery if either is lost. Logins are saved in `${XDG_CONFIG_HOME:-~/.config}/keyshoal/logins.vault`. Copy this encrypted file while the app is closed for a backup and retain both secrets separately.
 
-## Chrome extension
+## Windows x64
+
+Download and extract the Windows x64 ZIP from the review build, then open `keyshoal.exe` as your normal user. The package includes the same Chrome extension and a Windows native messaging relay and registration script. Follow the [Windows installation and Chrome steps](docs/windows.md).
+
+## Chrome extension on Linux
 
 1. In Chrome, open `chrome://extensions`, enable Developer mode, and choose **Load unpacked**. Select the extracted `chrome/extension` folder.
 2. Copy the extension ID from Chrome. In the same extracted archive run `./chrome/install-chrome-host.sh YOUR_EXTENSION_ID`. The optional second argument is `chromium` or `google-chrome-for-testing` for those browser families. If Chrome starts with a custom `--user-data-dir`, pass that absolute path as the third argument. The installer uses Python 3.
@@ -34,7 +38,7 @@ The sync indicator shows whether the local vault is offline, waiting for changes
 
 If you used the prior unmerged hub preview, the local vault migrates its retained encrypted logins after a successful unlock. Use your intended source copy first, then enroll other devices fresh. The prior preview did not record tombstones or original edit ancestry, so it cannot reconstruct that history.
 
-See [iOS build and device tests](docs/ios.md), [Windows handoff](docs/windows.md), and [Security design and limitations](docs/security.md).
+See [iOS build and device tests](docs/ios.md), [Windows installation and build](docs/windows.md), and [Security design and limitations](docs/security.md).
 
 ## Development checks
 

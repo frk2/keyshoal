@@ -6,7 +6,11 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 process.chdir(fileURLToPath(new URL('..', import.meta.url)));
-if (process.argv[2] !== 'linux' || process.platform !== 'linux') throw new Error('Run package:linux on Linux.');
+const platform = { linux: 'linux', windows: 'win32' }[process.argv[2]];
+if (!platform || platform !== process.platform) throw new Error('Use package:linux on Linux or package:windows on Windows.');
+const windows = platform === 'win32';
+const host = windows ? 'keyshoal-chrome-host.exe' : 'keyshoal-chrome-host';
+const installer = windows ? 'install-chrome-host.ps1' : 'install-chrome-host.sh';
 execFileSync(process.execPath, ['scripts/build-desktop.mjs'], { stdio: 'inherit' });
 const [directory] = await packager({
   dir: 'build/desktop',
@@ -14,24 +18,25 @@ const [directory] = await packager({
   executableName: 'keyshoal',
   electronVersion: '45.5.0',
   arch: process.arch,
-  platform: 'linux',
+  platform,
   out: 'dist',
   overwrite: true,
   asar: true,
   prune: false
 });
-await flipFuses(path.join(directory, 'keyshoal'), {
+await flipFuses(path.join(directory, windows ? 'keyshoal.exe' : 'keyshoal'), {
   version: FuseVersion.V1,
   [F.RunAsNode]: false,
   [F.EnableNodeOptionsEnvironmentVariable]: false,
   [F.EnableNodeCliInspectArguments]: false,
-  [F.OnlyLoadAppFromAsar]: true
+  [F.OnlyLoadAppFromAsar]: true,
+  ...(windows ? { [F.EnableEmbeddedAsarIntegrityValidation]: true } : {})
 });
 await mkdir(path.join(directory, 'chrome'), { recursive: true });
 await Promise.all([
   cp('extension', path.join(directory, 'chrome', 'extension'), { recursive: true }),
-  cp('build/keyshoal-chrome-host', path.join(directory, 'chrome', 'keyshoal-chrome-host')),
-  cp('scripts/install-chrome-host.sh', path.join(directory, 'chrome', 'install-chrome-host.sh')),
+  cp(path.join('build', host), path.join(directory, 'chrome', host)),
+  cp(path.join('scripts', installer), path.join(directory, 'chrome', installer)),
   cp('README.md', path.join(directory, 'README.md')),
   cp('docs', path.join(directory, 'docs'), { recursive: true })
 ]);
@@ -46,9 +51,14 @@ async function distributionMode(file) {
     await chmod(file, (stat.mode & 0o111) ? 0o755 : 0o644);
   }
 }
-await distributionMode(directory);
-const filename = directory + '.tar.xz';
-execFileSync('tar', ['-cJf', filename, '-C', path.dirname(directory), path.basename(directory)], {
-  env: { ...process.env, XZ_OPT: '-T2 -3' }, stdio: 'inherit'
-});
+const filename = directory + (windows ? '.zip' : '.tar.xz');
+if (windows) {
+  const tar = path.join(process.env.SystemRoot, 'System32', 'tar.exe');
+  execFileSync(tar, ['-acf', filename, '-C', path.dirname(directory), path.basename(directory)], { stdio: 'inherit' });
+} else {
+  await distributionMode(directory);
+  execFileSync('tar', ['-cJf', filename, '-C', path.dirname(directory), path.basename(directory)], {
+    env: { ...process.env, XZ_OPT: '-T2 -3' }, stdio: 'inherit'
+  });
+}
 console.log(filename);

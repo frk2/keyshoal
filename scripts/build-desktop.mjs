@@ -26,4 +26,10 @@ if (process.platform === 'linux') {
     '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-D_GNU_SOURCE', '-D_FORTIFY_SOURCE=2', '-fstack-protector-strong',
     '-fPIE', '-pie', '-Wl,-z,relro,-z,now', 'desktop/chrome-host.c', '-o', 'build/keyshoal-chrome-host'
   ], { stdio: 'inherit' });
+} else if (process.platform === 'win32') {
+  execFileSync(process.env.KEYSHOAL_CC || 'cl.exe', [
+    '/nologo', '/TC', '/std:c11', '/W4', '/WX', '/O2', '/MT', '/GS', '/guard:cf',
+    '/Fobuild/keyshoal-chrome-host-win.obj', '/Febuild/keyshoal-chrome-host.exe',
+    'desktop/chrome-host-win.c', 'advapi32.lib', '/link', '/DYNAMICBASE', '/NXCOMPAT', '/HIGHENTROPYVA', '/GUARD:CF'
+  ], { stdio: 'inherit' });
 }

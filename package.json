@@ -18,7 +18,8 @@
     "test:desktop": "npm run build:desktop && node tests/desktop-smoke.mjs",
     "test:chrome": "npm run build:desktop && node tests/chrome-smoke.mjs",
     "export:ios": "npm -w @keyshoal/mobile run export:ios",
-    "test:sync": "npm run build:desktop && node tests/peer-smoke.mjs"
+    "test:sync": "npm run build:desktop && node tests/peer-smoke.mjs",
+    "package:windows": "node scripts/package.mjs windows"
   },
   "dependencies": {
     "@keyshoal/vault": "0.1.0",

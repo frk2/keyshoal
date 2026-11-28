@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { PASS, instance, createVault, addLogin, evidence } from './smoke-utils.mjs';
 
 const run = await instance();
@@ -15,12 +16,15 @@ try {
   await page.waitForFunction(expected => document.getElementById('secret').textContent === expected, secret);
   await page.getByRole('button', { name: 'Hide', exact: true }).click();
   assert.equal(await page.locator('#secret').textContent(), '••••••••••••');
-  const file = path.join(env.XDG_CONFIG_HOME, 'keyshoal', 'logins.vault');
+  const file = path.join(env.KEYSHOAL_DATA_DIR || path.join(env.XDG_CONFIG_HOME, 'keyshoal'), 'logins.vault');
   const binary = readFileSync(file);
   for (const text of [secret, key, PASS, 'Demo account', 'demo-login', 'https://login.example.test']) {
     assert.equal(binary.includes(text), false);
   }
-  assert.equal(statSync(file).mode & 0o777, 0o600);
+  if (process.platform === 'win32') {
+    execFileSync('powershell.exe', ['-NoProfile', '-File', path.resolve('tests/check-windows-vault-acl.ps1'), file],
+      { windowsHide: true, stdio: 'inherit', timeout: 12000 });
+  } else assert.equal(statSync(file).mode & 0o777, 0o600);
   await page.getByRole('button', { name: 'Devices' }).click();
   assert.match(await page.locator('#bridge-status').textContent(), /bridge is ready/);
   await evidence(page, '03-desktop-devices.png', run.app);

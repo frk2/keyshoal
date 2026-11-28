@@ -1,5 +1,5 @@
 import { _electron as electron } from 'playwright';
-import { mkdtempSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -8,15 +8,17 @@ import assert from 'node:assert/strict';
 export const PASS = 'Synthetic automation fixture only';
 export async function instance() {
   const folder = mkdtempSync(path.join(tmpdir(), 'ks-'));
+  const windows = process.platform === 'win32';
   const env = {
     ...process.env, XDG_CONFIG_HOME: path.join(folder, 'config'), XDG_CACHE_HOME: path.join(folder, 'cache'),
-    XDG_RUNTIME_DIR: path.join(folder, 'run')
+    XDG_RUNTIME_DIR: path.join(folder, 'run'),
+    ...(windows ? { KEYSHOAL_DATA_DIR: path.join(folder, 'Windows vault') } : {})
   };
   for (const key of ['XDG_CONFIG_HOME', 'XDG_CACHE_HOME','XDG_RUNTIME_DIR']) mkdirSync(env[key], { mode: 0o700 });
   let app, page;
   try {
     app = await electron.launch({
-      args: [path.resolve('build/desktop'), '--ozone-platform=x11'],
+      args: [path.resolve('build/desktop'), ...(windows ? [] : ['--ozone-platform=x11'])],
       env, timeout: 20_000
     });
     page = await app.firstWindow({ timeout: 15_000 });
@@ -57,6 +59,19 @@ export async function evidence(page, file, app) {
   mkdirSync(process.env.KEYSHOAL_EVIDENCE, { recursive: true });
   const filename = path.join(process.env.KEYSHOAL_EVIDENCE, file);
   if (!app) return page.screenshot({ path: filename });
+  if (process.platform === 'win32') {
+    try { return await page.screenshot({ path: filename }); }
+    catch {
+      const encoded = await app.evaluate(async ({ BrowserWindow }) => {
+        const picture = await BrowserWindow.getAllWindows()[0].capturePage();
+        if (picture.isEmpty()) throw new Error('Windows desktop screenshot is empty.');
+        return picture.toPNG().toString('base64');
+      });
+      writeFileSync(filename, Buffer.from(encoded, 'base64'));
+      return;
+
+    }
+  }
   const handle = await app.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows()[0];
     if (!window.isVisible()) window.show();

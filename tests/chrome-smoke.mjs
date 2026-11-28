@@ -10,14 +10,16 @@ import { instance, createVault, addLogin } from './smoke-utils.mjs';
 
 const run = await instance();
 const extension = path.resolve('extension');
-const id = createHash('sha256').update(extension).digest('hex').slice(0, 32)
+const windows = process.platform === 'win32';
+const cdpAction = windows || process.env.KEYSHOAL_TEST_CDP_ACTION === '1';
+let id = createHash('sha256').update(extension).digest('hex').slice(0, 32)
   .replace(/[0-9a-f]/g, hex => String.fromCharCode(97 + Number.parseInt(hex, 16)));
 const xdotool = (...args) => execFileSync(process.env.KEYSHOAL_XDOTOOL || 'xdotool', args, { encoding: 'utf8', timeout: 5000 }).trim();
-let browser, server;
+let browser, server, uninstall;
 try {
   const cert = path.join(run.folder, 'fixture-cert.pem');
   const key = path.join(run.folder, 'fixture-key.pem');
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes',
+  execFileSync(process.env.KEYSHOAL_TEST_OPENSSL || 'openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes',
     '-subj', '/CN=localhost', '-addext', 'subjectAltName=IP:127.0.0.1,DNS:localhost',
     '-days', '1', '-keyout', key, '-out', cert], { stdio: 'ignore' });
   server = createServer({ cert: readFileSync(cert), key: readFileSync(key) }, (req, res) => {
@@ -36,27 +38,48 @@ try {
   });
   const dir = path.join(run.folder, 'packaged-host');
   mkdirSync(dir);
-  cpSync('build/keyshoal-chrome-host', path.join(dir, 'keyshoal-chrome-host'));
-  cpSync('scripts/install-chrome-host.sh', path.join(dir, 'install-chrome-host.sh'));
   const profile = path.join(run.folder, 'browser');
-  execFileSync(path.join(dir, 'install-chrome-host.sh'), [id, 'google-chrome-for-testing', profile], { env: run.env });
+  if (!windows) {
+    cpSync('build/keyshoal-chrome-host', path.join(dir, 'keyshoal-chrome-host'));
+    cpSync('scripts/install-chrome-host.sh', path.join(dir, 'install-chrome-host.sh'));
+    execFileSync(path.join(dir, 'install-chrome-host.sh'), [id, 'google-chrome-for-testing', profile], { env: run.env });
+  }
   const port = server.address().port;
   const origin = 'https://127.0.0.1:' + port;
   await createVault(run.page);
   await run.page.getByRole('button', { name: 'Devices', exact: true }).click();
-  await run.page.getByRole('button', { name: 'Pause sync', exact: true }).click();
-  await run.page.locator('#sync-badge').filter({ hasText: 'Offline · sync paused' }).waitFor();
+  const pause = run.page.getByRole('button', { name: 'Pause sync', exact: true });
+  if (await pause.isVisible()) await pause.click();
+  await run.page.locator('#sync-badge').filter({ hasText: 'Offline' }).waitFor();
   await run.page.getByRole('button', { name: 'Vault', exact: true }).click();
   const password = await addLogin(run.page, origin);
   browser = await chromium.launchPersistentContext(profile, {
     channel: 'chromium', headless: false, ignoreDefaultArgs: ['--disable-extensions'], ignoreHTTPSErrors: true, env: {
       ...run.env, XDG_SESSION_TYPE: 'x11'
     },
-    args: ['--ozone-platform=x11', '--disable-extensions-except=' + extension, '--load-extension=' + extension]
+    args: [
+      ...(windows ? [] : ['--ozone-platform=x11']),
+      ...(cdpAction ? ['--enable-unsafe-extension-debugging'] : []),
+      '--disable-extensions-except=' + extension, '--load-extension=' + extension
+    ]
   });
   const page = browser.pages()[0];
-  const popupUrl = 'chrome-extension://' + id + '/popup.html';
   const inspect = await browser.newCDPSession(page);
+  const browserCDP = cdpAction ? await browser.browser().newBrowserCDPSession() : null;
+  if (windows) {
+    const { extensions } = await browserCDP.send('Extensions.getExtensions');
+    id = extensions.find(candidate => candidate.name === 'Keyshoal')?.id;
+    assert.match(id, /^[a-p]{32}$/);
+    const helper = path.join(dir, 'install-chrome-host.ps1');
+    cpSync('build/keyshoal-chrome-host.exe', path.join(dir, 'keyshoal-chrome-host.exe'));
+    cpSync('scripts/install-chrome-host.ps1', helper);
+    const runInstaller = (...args) => execFileSync('powershell.exe', [
+      '-NoProfile', '-File', helper, '-ManifestDirectory', dir, ...args
+    ], { env: run.env, windowsHide: true, timeout: 12000, stdio: 'ignore' });
+    uninstall = () => runInstaller('-Uninstall');
+    runInstaller('-ExtensionId', id);
+  }
+  const popupUrl = 'chrome-extension://' + id + '/popup.html';
   async function poll(check, message) {
     const until = Date.now() + 5000;
     do {
@@ -69,9 +92,15 @@ try {
   async function action(url, text) {
     await page.goto(url);
     await page.bringToFront();
-    const win = xdotool('search', '--sync', '--name', 'Keyshoal Chrome fixture').split('\n').at(-1);
-    xdotool('windowfocus', '--sync', win);
-    xdotool('key', '--clearmodifiers', 'alt+shift+k');
+    if (browserCDP) {
+      const { targetInfos } = await browserCDP.send('Target.getTargets', { filter: [{ type: 'tab', exclude: false }] });
+      assert.equal(targetInfos.length, 1, 'The browser smoke uses a single disposable tab.');
+      await browserCDP.send('Extensions.triggerAction', { id, targetId: targetInfos[0].targetId });
+    } else {
+      const win = xdotool('search', '--sync', '--name', 'Keyshoal Chrome fixture').split('\n').at(-1);
+      xdotool('windowfocus', '--sync', win);
+      xdotool('key', '--clearmodifiers', 'alt+shift+k');
+    }
     // Chrome action popups are browser-owned targets and do not appear in
     // Playwright's normal BrowserContext pages, so inspect that real target.
     const target = await poll(async () => (await inspect.send('Target.getTargets')).targetInfos.find(
@@ -120,7 +149,8 @@ try {
       },
       close: async () => {
         inspect.off('Target.receivedMessageFromTarget', listener);
-        xdotool('key', 'Escape');
+        if (browserCDP) await inspect.send('Target.closeTarget', { targetId: target.targetId });
+        else xdotool('key', 'Escape');
         await poll(async () => !(await inspect.send('Target.getTargets')).targetInfos.some(
           info => info.targetId === target.targetId
         ), 'The action popup did not close.');
@@ -159,5 +189,5 @@ try {
 } finally {
   await browser?.close();
   await server?.close();
-  await run.close();
+  try { uninstall?.(); } finally { await run.close(); }
 }

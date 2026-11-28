@@ -9,9 +9,15 @@ import { decodeSetup, encodeSetup, MAX_JOURNAL } from '@keyshoal/vault/protocol'
 import { privateDirectory, readPrivate, writePrivate } from './files.js';
 import { PeerNetwork } from './sync.js';
 import { answerNative, startBridge } from './bridge.js';
+import { startWindowsBridge, windowsDataDirectory } from './windows.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PAGE = path.join(ROOT, 'index.html');
+const windows = process.platform === 'win32';
+const windowsHost = windows ? path.join(
+  app.isPackaged ? path.join(path.dirname(app.getPath('exe')), 'chrome') : path.dirname(ROOT),
+  'keyshoal-chrome-host.exe'
+) : null;
 const LOCK_MS = 5 * 60 * 1000;
 let dir, vaultFile, win, hub, bridge, active, securityKey, unlockPending, clipboardValue, clipboardTimer, lockTimer;
 let generation = 0;
@@ -170,8 +176,8 @@ function window() {
 }
 
 function open() {
-  process.umask(0o077);
-  dir = privateDirectory(path.join(app.getPath('appData'), 'keyshoal'));
+  if (!windows) process.umask(0o077);
+  dir = windows ? windowsDataDirectory(windowsHost) : privateDirectory(path.join(app.getPath('appData'), 'keyshoal'));
   vaultFile = path.join(dir, 'logins.vault');
   app.setPath('userData', privateDirectory(path.join(dir, 'desktop')));
   if (!app.requestSingleInstanceLock()) return app.quit();
@@ -184,8 +190,14 @@ function open() {
       done({ cancel: !url.startsWith('file:') && !url.startsWith('data:') }));
     hub = new PeerNetwork(() => active, commit, sendChanged);
     try {
-      bridge = await startBridge(process.env.XDG_RUNTIME_DIR, request => answerNative(active, request));
+      const respond = request => answerNative(active, request);
+      bridge = windows ? await startWindowsBridge(windowsHost, respond) : await startBridge(process.env.XDG_RUNTIME_DIR, respond);
       bridgeReady = Boolean(bridge);
+      bridge?.onClose?.(() => {
+        bridgeReady = false;
+        bridgeError = 'The Windows Chrome bridge stopped. Restart Keyshoal to reconnect.';
+        sendChanged();
+      });
     } catch {
       bridgeError = 'Could not start the per-user Chrome bridge.';
     }
@@ -210,4 +222,8 @@ function open() {
 app.enableSandbox();
 app.on('before-quit', () => { lock(); bridge?.close(); });
 app.on('window-all-closed', () => app.quit());
-open();
+try { open(); }
+catch {
+  process.stderr.write('Keyshoal could not initialize the private vault directory.\n');
+  app.exit(1);
+}

@@ -1,10 +1,39 @@
-# Windows handoff
+# Windows x64
 
-No Windows binary was built on Linux. Keep the web extension, vault bytes and Bonjour discovery and binary peer protocol compatible. Work with a new branch and synthetic data on Windows 11, then review in a separate pull request.
+Use the Windows x64 artifact from the current pull request’s **Build and verify** run. It is a portable, unsigned ZIP containing the desktop app, Chrome extension, Windows native messaging relay, and registration script. You do not need to provide a Windows machine to produce it. GitHub Actions provisions the `windows-2025` runner declared in `.github/workflows/verify.yml`.
 
-1. Install Node 22.22+ and the Windows build tools. Run `npm ci`, `npm exec -- install-electron`, `npm test`, and `npm run build:desktop`. Start the bundled desktop with `npm start`. Do not reuse a production vault for testing. The shared Electron main code and peer sync engine are platform-neutral apart from the native Chrome bridge and filesystem permission handling.
-2. Implement a Windows named-pipe bridge alongside the Unix implementation in `desktop/bridge.js`. Restrict the pipe to the interactive user's SID, reject remote clients, and reject another process pre-creating the name. Do not rely only on a random pipe name or the default DACL. If Node’s pipe server cannot set the ACL and `PIPE_REJECT_REMOTE_CLIENTS`, use a small audited Windows helper/addon to create it. Preserve the 4-byte little-endian framing, bounded messages, exact-origin checks and desktop lock requirement. Validate the private vault directory and all vault journal with a current-user ACL too. Test atomic writes using real NTFS and ensure failed writes keep the old vault usable.
-3. Ship a Windows Native Messaging relay executable. Use binary stdin/stdout mode, bounded native-endian (Windows little-endian) 4-byte framing, read/write loops, and timeouts. Validate the Chrome origin argument, never log request or reply contents, and prevent a launch from making duplicate desktop vault instances. Connect only to the restricted Windows pipe. The Linux C host in `desktop/chrome-host.c` is a framing reference, not directly portable.
-4. Register `com.keyshoal.desktop` under `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.keyshoal.desktop`. Set the default value to the absolute path of a Chrome host JSON manifest. Include `name`, `description`, absolute executable `path`, `type: stdio`, and the exact installed extension’s `chrome-extension://EXTENSION_ID/` in `allowed_origins`. Add a matching uninstall step. Verify [Google’s Chrome Native Messaging documentation](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging) for registration details.
-5. Extend `scripts/package.mjs` or use equivalent Electron tooling for Windows x64, preserving the security fuses and ASAR. Enable embedded ASAR integrity validation if the packaging tool can provide the required integrity metadata. Provide a portable zip or per-user installer. Treat Authenticode code signing and browser-store registration as later, explicitly authorized publishing steps. Never add a global firewall rule. Verify normal Windows firewall behavior when an unlocked app advertises and browses Bonjour on the private LAN.
-6. Test a signed or unsigned build in a clean Windows profile as appropriate. Verify create/reopen, wrong key, encrypted storage, exact-origin fill, locked bridge, Chromium profile isolation, malicious different-user pipe clients denied, offline edits, tombstone and conflict convergence, and sync against Linux and iOS with the first device offline. Transfer only deliberately synthesized test data between Linux and Windows to prove interoperability. Document anything still unverified.
+## Install
+
+1. Download the artifact, verify the SHA-256 of the nested `keyshoal-win32-x64.zip` against `SHA256SUMS` with PowerShell's `Get-FileHash`, and extract the entire ZIP to a folder you own. Keep the adjacent DLLs, `resources` and `chrome` folders in place.
+2. Run `keyshoal.exe` as your normal account. The app stores its encrypted journal in `%LOCALAPPDATA%\Keyshoal\logins.vault`. Its directory has a protected current-user and SYSTEM ACL. Do not run Keyshoal or Chrome as administrator for everyday use.
+3. To sync, create or join a vault with a setup code from any replica. When Windows asks about network access, choose only the private network you intend to use. No global firewall rule or cloud account is needed.
+
+## Connect Chrome
+
+1. Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select the extracted `chrome\extension` folder. Copy the exact extension ID displayed there.
+2. In PowerShell, from the extracted application directory, run:
+
+   ```powershell
+   .\chrome\install-chrome-host.ps1 -ExtensionId YOUR_EXTENSION_ID
+   ```
+
+   This registers the executable for that extension ID under your current user’s Chrome Native Messaging registry key. It does not require elevation. Run the same script with `-Uninstall` to remove the registration. Re-run it with the current extension ID if you move the extracted folder.
+3. Open and unlock Keyshoal, visit the corresponding HTTPS site, and invoke the Keyshoal popup or press **Alt+Shift+K**. Pick the matching login and review the fields before submitting.
+
+The current Windows build is an unsigned preview and is not listed in the Chrome Web Store. Windows may display an unsigned-app prompt. Verify the file’s source and checksum before running it.
+
+## Build or reproduce checks
+
+On Windows x64, use a Visual Studio x64 Developer PowerShell with the C++ build tools and Windows SDK installed, plus Node 22.22 or newer.
+
+```powershell
+npm ci
+npm exec -- install-electron
+npm run package:windows
+npm exec -- playwright install chromium
+node tests/desktop-smoke.mjs
+node tests/chrome-smoke.mjs
+node tests/windows-package-smoke.mjs dist/keyshoal-win32-x64/keyshoal.exe
+```
+
+The tests use synthetic vaults and a disposable browser profile. The Chrome test installs and removes the current-user test registration, so run it in a disposable Windows account and not against an existing installed Keyshoal extension. Windows CI covers the desktop UI, locked bridge, exact-origin Chrome fill, private file ACL, and hardened package startup. Physical Windows 11 firewall behavior and mixed-device Wi-Fi should still be checked before production use.
