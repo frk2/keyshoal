@@ -29,11 +29,9 @@ jobs:
       - run: npm exec -- playwright install --with-deps chromium
       - run: sudo apt-get install -y apparmor ffmpeg xdotool xvfb xauth
       - run: KEYSHOAL_REQUIRE_LAN=1 npm test
-      - run: xvfb-run -a npm run test:desktop
-      - run: xvfb-run -a -s '-screen 0 1440x1000x24' npm run test:chrome
-      - run: xvfb-run -a -s '-screen 0 1440x1000x24' npm run test:sync
       - run: npm run package:linux
       - name: Start packaged app with the sandbox enabled
+        id: linux-package
         run: |
           sudo install -d -o root -g root -m 0755 /opt/keyshoal
           sudo cp -a dist/keyshoal-linux-x64/. /opt/keyshoal/
@@ -43,6 +41,21 @@ jobs:
             sudo apparmor_parser -r -T docs/keyshoal.apparmor
           fi
           xvfb-run -a node tests/package-smoke.mjs /opt/keyshoal/keyshoal
+      - name: Verify packaged desktop UI
+        env:
+          KEYSHOAL_TEST_PACKAGE: /opt/keyshoal/keyshoal
+        run: xvfb-run -a -s '-screen 0 1440x1000x24' node tests/desktop-smoke.mjs
+      - name: Verify Chrome autofill against the packaged app
+        if: ${{ !cancelled() && steps.linux-package.outcome == 'success' }}
+        env:
+          KEYSHOAL_TEST_PACKAGE: /opt/keyshoal/keyshoal
+        run: xvfb-run -a -s '-screen 0 1440x1000x24' node tests/chrome-smoke.mjs
+      - name: Verify three packaged Bonjour replicas
+        if: ${{ !cancelled() && steps.linux-package.outcome == 'success' }}
+        env:
+          KEYSHOAL_TEST_PACKAGE: /opt/keyshoal/keyshoal
+        run: xvfb-run -a -s '-screen 0 1440x1000x24' node tests/peer-smoke.mjs
+      - run: node tests/check-evidence.mjs
       - run: npm run export:ios
       - name: Generate Linux checksum
         working-directory: dist
@@ -59,6 +72,7 @@ jobs:
         with:
           name: keyshoal-linux-smoke-screens
           path: ${{ env.KEYSHOAL_EVIDENCE }}
+          if-no-files-found: error
 
   ios-simulator:
     runs-on: macos-26
@@ -102,6 +116,7 @@ jobs:
     env:
       KEYSHOAL_EVIDENCE: ${{ github.workspace }}/build/windows-evidence
       KEYSHOAL_TEST_POWERSHELL: pwsh.exe
+      KEYSHOAL_TEST_PACKAGE: dist/keyshoal-win32-x64/keyshoal.exe
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -113,7 +128,10 @@ jobs:
       - run: npm ci
       - run: npm exec -- install-electron
       - run: npm exec -- playwright install chromium
-      - run: npm test
+      - name: Test vault and Bonjour transport
+        env:
+          KEYSHOAL_REQUIRE_LAN: '1'
+        run: npm test
       - name: Build Windows x64 package
         id: windows-package
         shell: pwsh
@@ -124,8 +142,9 @@ jobs:
           & (Join-Path $vs 'Common7\Tools\Launch-VsDevShell.ps1') -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
           npm run package:windows
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - run: node tests/desktop-smoke.mjs
-      - name: Test Chrome with the installed native host
+      - name: Verify packaged desktop UI
+        run: node tests/desktop-smoke.mjs
+      - name: Verify Chrome autofill against the packaged app
         if: ${{ !cancelled() && steps.windows-package.outcome == 'success' }}
         shell: pwsh
         run: |
@@ -133,6 +152,10 @@ jobs:
             $env:KEYSHOAL_TEST_OPENSSL = Join-Path $env:ProgramFiles 'Git\usr\bin\openssl.exe'
           }
           node tests/chrome-smoke.mjs
+      - name: Verify three packaged Bonjour replicas
+        if: ${{ !cancelled() && steps.windows-package.outcome == 'success' }}
+        run: node tests/peer-smoke.mjs
+      - run: node tests/check-evidence.mjs
       - run: node tests/windows-package-smoke.mjs dist/keyshoal-win32-x64/keyshoal.exe
         if: ${{ !cancelled() && steps.windows-package.outcome == 'success' }}
       - name: Generate Windows checksum
@@ -155,3 +178,4 @@ jobs:
         with:
           name: keyshoal-windows-smoke-screens
           path: ${{ env.KEYSHOAL_EVIDENCE }}
+          if-no-files-found: error

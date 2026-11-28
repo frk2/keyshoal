@@ -51,3 +51,5 @@ npm run export:ios
 ```
 
 Use isolated X11 for the UI tests. Screenshot evidence needs FFmpeg with X11 capture and xdotool. Chrome automation needs `xdotool`, OpenSSL, and `npm exec -- playwright install chromium`. On a machine with Xvfb, run the UI tests under `xvfb-run -a`. Set `KEYSHOAL_REQUIRE_LAN=1` to run the real Bonjour/TCP integration test. The peer UI test requires local multicast and TCP as well as X11.
+
+See [visual verification](docs/verification.md) for the Windows and Linux screenshot archives and what each test covers.

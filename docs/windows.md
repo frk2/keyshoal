@@ -31,9 +31,16 @@ npm ci
 npm exec -- install-electron
 npm run package:windows
 npm exec -- playwright install chromium
+$env:KEYSHOAL_TEST_PACKAGE = 'dist/keyshoal-win32-x64/keyshoal.exe'
+$env:KEYSHOAL_EVIDENCE = 'build/windows-evidence'
+$env:KEYSHOAL_TEST_POWERSHELL = 'pwsh.exe'
 node tests/desktop-smoke.mjs
 node tests/chrome-smoke.mjs
+node tests/peer-smoke.mjs
+node tests/check-evidence.mjs
 node tests/windows-package-smoke.mjs dist/keyshoal-win32-x64/keyshoal.exe
 ```
 
-The tests use synthetic vaults and a disposable browser profile. The Chrome test installs and removes the current-user test registration, so run it in a disposable Windows account and not against an existing installed Keyshoal extension. Windows CI covers the desktop UI, locked bridge, exact-origin Chrome fill, private file ACL, and hardened package startup. Physical Windows 11 firewall behavior and mixed-device Wi-Fi should still be checked before production use.
+Use a clean evidence directory for each run. The Chrome test needs OpenSSL. If it is not on your PATH, set `KEYSHOAL_TEST_OPENSSL` to the path of your OpenSSL executable, such as the one shipped by Git for Windows.
+
+The tests use synthetic vaults and a disposable browser profile. The Chrome test installs and removes the current-user test registration, so run it in a disposable Windows account and not against an existing installed Keyshoal extension. Windows CI uses the packaged executable and its bundled extension, tests the vault ACL and hardened startup, and exercises three real Bonjour peers on the runner. See [verification coverage](verification.md) for the screenshot inventory and the limits of testing within one VM.
