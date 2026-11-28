@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Keyshoal",
+  "description": "Fill logins from your unlocked local Keyshoal desktop vault.",
+  "version": "0.1.0",
+  "minimum_chrome_version": "106",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "nativeMessaging"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Fill with Keyshoal"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+K"
+      }
+    }
+  }
+}

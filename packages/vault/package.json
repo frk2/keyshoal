@@ -1,0 +1,15 @@
+{
+  "name": "@keyshoal/vault",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./vault.js",
+    "./protocol": "./protocol.js",
+    "./replica": "./replica.js"
+  },
+  "dependencies": {
+    "@noble/ciphers": "2.4.0",
+    "@noble/hashes": "2.4.0"
+  }
+}

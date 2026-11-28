@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; base-uri 'none'; form-action 'none'">
+  <title>Keyshoal</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="renderer.js"></script>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="mark" aria-hidden="true">KS</span><div>Keyshoal<small>LOCAL PASSWORD VAULT</small></div></div>
+  <nav id="nav" hidden><span id="sync-badge" role="status" class="sync-badge"></span><button id="nav-vault" class="secondary" type="button">Vault</button><button id="nav-devices" class="secondary" type="button">Devices</button><button id="lock" class="outline" type="button">Lock</button></nav>
+</header>
+<p id="error" class="error" role="alert" hidden></p>
+<main id="app" aria-live="off"><p>Opening Keyshoal…</p></main>
+<template id="access">
+  <section class="access panel">
+    <p class="eyebrow">Your passwords. Your devices.</p>
+    <h1 id="access-title"></h1><p class="note" id="access-note"></p>
+    <form id="access-form">
+      <label>Passphrase <input id="passphrase" type="password" required maxlength="1024" autocomplete="off" spellcheck="false"></label>
+      <label id="confirm-label">Confirm passphrase <input id="confirm" type="password" maxlength="1024" autocomplete="off" spellcheck="false"></label>
+      <label id="key-label">Security key <input id="key" type="password" maxlength="70" autocomplete="off" spellcheck="false"></label>
+      <label id="setup-label" hidden>Setup code <input id="setup-code" type="password" maxlength="240" autocomplete="off" spellcheck="false"></label>
+      <button id="access-submit" type="submit"></button>
+      <button id="access-switch" class="secondary" type="button" hidden></button>
+    </form>
+  </section>
+</template>
+<template id="vault">
+  <div class="workspace">
+    <aside class="rail">
+      <div class="section-head"><div><p class="eyebrow">Personal vault</p><h1>Logins</h1></div><button id="add">New login</button></div>
+      <label class="search">Search logins<input id="search" type="search" placeholder="Title or website" autocomplete="off"></label>
+      <div id="items" class="items" aria-label="Saved logins"></div>
+    </aside>
+    <section id="detail" class="panel" aria-label="Login details"></section>
+  </div>
+</template>
+<template id="entry">
+  <p class="eyebrow">Saved login</p><h2 id="title"></h2>
+  <dl><dt>Website</dt><dd id="origin"></dd><dt>Username</dt><dd id="username"></dd><dt>Password</dt><dd><code id="secret">••••••••••••</code></dd></dl>
+  <div class="buttons"><button id="reveal">Reveal</button><button id="copy" class="outline">Copy password</button><button id="edit" class="secondary">Edit</button><button id="delete" class="danger">Delete</button></div>
+  <p class="note" id="entry-note" aria-live="polite">Copied passwords are cleared from the current clipboard after 30 seconds.</p>
+  <section id="delete-confirm" class="inset" hidden><p>Delete this login from the vault?</p><button id="delete-yes" class="danger">Delete login</button> <button id="delete-no" class="secondary">Cancel</button></section>
+</template>
+<template id="editor">
+  <p class="eyebrow">Personal vault</p><h2 id="editor-title"></h2>
+  <form id="editor-form">
+    <label>Title <input name="title" required maxlength="128" autocomplete="off"></label>
+    <label>Website <input name="origin" required maxlength="2048" placeholder="https://example.com" autocomplete="off" spellcheck="false"></label>
+    <label>Username <input name="username" maxlength="512" autocomplete="off" spellcheck="false"></label>
+    <label>Password <input name="password" type="password" required maxlength="1024" autocomplete="off" spellcheck="false"></label>
+    <div class="buttons"><button id="generate" type="button" class="outline">Generate password</button><button id="edit-reveal" type="button" class="secondary">Show password</button></div>
+    <div class="buttons"><button type="submit">Save login</button><button id="cancel" type="button" class="secondary">Cancel</button></div>
+  </form>
+</template>
+<template id="devices">
+  <section class="panel devices"><p class="eyebrow">Same Wi-Fi only</p><h1>Devices</h1>
+    <p class="note">Your vault works offline. While unlocked, sync finds peers using Bonjour on the local network.</p>
+    <div class="inset">
+      <h2>Peer sync</h2><p id="lan-status" role="status"></p><p id="last-sync" class="note"></p>
+      <div class="buttons"><button id="start-sync">Resume sync</button><button id="stop-sync" class="outline">Pause sync</button><button id="sync-now" class="secondary">Sync now</button></div>
+      <h3>Set up a replica</h3><p class="note">Every unlocked device can find other replicas on the same network. No computer is the master.</p>
+      <div class="buttons"><button id="invite" class="outline">Show setup QR</button><button id="copy-setup" class="secondary">Copy setup code</button></div>
+      <p id="setup-note" class="note" role="status"></p>
+      <div id="qr" class="inset" hidden>
+        <p>The QR contains your security key. Scan it privately. The new device still needs the vault passphrase.</p>
+        <img id="qr-image" width="252" height="252" alt="Keyshoal peer setup code">
+        <button id="hide-qr" class="secondary">Hide setup QR</button>
+      </div>
+    </div>
+    <div class="inset"><h2>Chrome autofill</h2><p id="bridge-status"></p><p class="note">Install the companion extension and select a login in its popup on the matching HTTPS site. Keyshoal never submits forms.</p></div>
+    <div class="inset"><h2>Recovery key</h2><p class="note">Keep the 64-character key offline and separate from the passphrase. Losing either means losing access.</p><button id="recovery" class="outline">Show security key</button><code id="recovery-value" hidden></code></div>
+  </section>
+</template>
+<template id="conflicts">
+  <p class="eyebrow">Review conflict</p><h2 id="conflict-title"></h2>
+  <p class="note">More than one version was changed offline. Compare them and choose what to keep. You can do this while offline.</p>
+  <div id="conflict-versions"></div>
+</template>
+<template id="backup">
+  <section class="access panel"><p class="eyebrow">One-time setup</p><h1>Save your security key.</h1>
+  <p class="note">You’ll need this key and your passphrase every time you unlock Keyshoal on this desktop. Write it down and keep it offline, separate from your passphrase.</p>
+  <code id="backup-value"></code><button id="finish">I saved my security key</button></section>
+</template>
+</body></html>

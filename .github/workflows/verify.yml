@@ -1,0 +1,181 @@
+name: Build and verify
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: keyshoal-${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      EXPO_NO_TELEMETRY: '1'
+      KEYSHOAL_EVIDENCE: ${{ github.workspace }}/build/evidence
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.22.1'
+          cache: npm
+      - run: npm ci
+      - run: npm exec -- install-electron
+      - run: npm exec -- playwright install --with-deps chromium
+      - run: sudo apt-get install -y apparmor ffmpeg xdotool xvfb xauth
+      - run: KEYSHOAL_REQUIRE_LAN=1 npm test
+      - run: npm run package:linux
+      - name: Start packaged app with the sandbox enabled
+        id: linux-package
+        run: |
+          sudo install -d -o root -g root -m 0755 /opt/keyshoal
+          sudo cp -a dist/keyshoal-linux-x64/. /opt/keyshoal/
+          sudo chown -R root:root /opt/keyshoal
+          sudo chmod -R go-w /opt/keyshoal
+          if grep -qx 1 /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then
+            sudo apparmor_parser -r -T docs/keyshoal.apparmor
+          fi
+          xvfb-run -a node tests/package-smoke.mjs /opt/keyshoal/keyshoal
+      - name: Verify packaged desktop UI
+        env:
+          KEYSHOAL_TEST_PACKAGE: /opt/keyshoal/keyshoal
+        run: xvfb-run -a -s '-screen 0 1440x1000x24' node tests/desktop-smoke.mjs
+      - name: Verify Chrome autofill against the packaged app
+        if: ${{ !cancelled() && steps.linux-package.outcome == 'success' }}
+        env:
+          KEYSHOAL_TEST_PACKAGE: /opt/keyshoal/keyshoal
+        run: xvfb-run -a -s '-screen 0 1440x1000x24' node tests/chrome-smoke.mjs
+      - name: Verify three packaged Bonjour replicas
+        if: ${{ !cancelled() && steps.linux-package.outcome == 'success' }}
+        env:
+          KEYSHOAL_TEST_PACKAGE: /opt/keyshoal/keyshoal
+        run: xvfb-run -a -s '-screen 0 1440x1000x24' node tests/peer-smoke.mjs
+      - run: node tests/check-evidence.mjs
+      - run: npm run export:ios
+      - name: Generate Linux checksum
+        working-directory: dist
+        run: sha256sum keyshoal-linux-x64.tar.xz > SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: keyshoal-linux-x64
+          path: |
+            dist/keyshoal-linux-x64.tar.xz
+            dist/SHA256SUMS
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: keyshoal-linux-smoke-screens
+          path: ${{ env.KEYSHOAL_EVIDENCE }}
+          if-no-files-found: error
+
+  ios-simulator:
+    runs-on: macos-26
+    timeout-minutes: 35
+    env:
+      EXPO_NO_TELEMETRY: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.22.1'
+          cache: npm
+      - run: npm ci
+      - run: npm exec --workspace @keyshoal/mobile -- expo prebuild --platform ios --no-install
+      - run: pod install
+        working-directory: mobile/ios
+      - name: Compile the unsigned simulator app
+        working-directory: mobile/ios
+        run: |
+          set -o pipefail
+          xcodebuild -workspace Keyshoal.xcworkspace -scheme Keyshoal -configuration Release \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/keyshoal-xcode" \
+            CODE_SIGNING_ALLOWED=NO build | xcbeautify
+      - name: Archive simulator app
+        run: |
+          built="$RUNNER_TEMP/keyshoal-xcode/Build/Products/Release-iphonesimulator"
+          test -f "$built/Keyshoal.app/Keyshoal"
+          test -f "$built/Keyshoal.app/main.jsbundle"
+          tar -czf "$RUNNER_TEMP/keyshoal-ios-simulator-arm64.tar.gz" -C "$built" Keyshoal.app
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: keyshoal-ios-simulator-arm64
+          path: ${{ runner.temp }}/keyshoal-ios-simulator-arm64.tar.gz
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 25
+    env:
+      KEYSHOAL_EVIDENCE: ${{ github.workspace }}/build/windows-evidence
+      KEYSHOAL_TEST_POWERSHELL: pwsh.exe
+      KEYSHOAL_TEST_PACKAGE: dist/keyshoal-win32-x64/keyshoal.exe
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.22.1'
+          cache: npm
+      - run: npm ci
+      - run: npm exec -- install-electron
+      - run: npm exec -- playwright install chromium
+      - name: Test vault and Bonjour transport
+        env:
+          KEYSHOAL_REQUIRE_LAN: '1'
+        run: npm test
+      - name: Build Windows x64 package
+        id: windows-package
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw 'Visual C++ developer tools were not found.' }
+          & (Join-Path $vs 'Common7\Tools\Launch-VsDevShell.ps1') -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          npm run package:windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify packaged desktop UI
+        run: node tests/desktop-smoke.mjs
+      - name: Verify Chrome autofill against the packaged app
+        if: ${{ !cancelled() && steps.windows-package.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          if (!(Get-Command openssl -ErrorAction SilentlyContinue)) {
+            $env:KEYSHOAL_TEST_OPENSSL = Join-Path $env:ProgramFiles 'Git\usr\bin\openssl.exe'
+          }
+          node tests/chrome-smoke.mjs
+      - name: Verify three packaged Bonjour replicas
+        if: ${{ !cancelled() && steps.windows-package.outcome == 'success' }}
+        run: node tests/peer-smoke.mjs
+      - run: node tests/check-evidence.mjs
+      - run: node tests/windows-package-smoke.mjs dist/keyshoal-win32-x64/keyshoal.exe
+        if: ${{ !cancelled() && steps.windows-package.outcome == 'success' }}
+      - name: Generate Windows checksum
+        shell: pwsh
+        working-directory: dist
+        run: |
+          $file = 'keyshoal-win32-x64.zip'
+          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath SHA256SUMS -Encoding ascii -Value "$digest  $file"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: keyshoal-windows-x64
+          path: |
+            dist/keyshoal-win32-x64.zip
+            dist/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: keyshoal-windows-smoke-screens
+          path: ${{ env.KEYSHOAL_EVIDENCE }}
+          if-no-files-found: error
