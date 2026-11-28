@@ -14,7 +14,8 @@ const windows = process.platform === 'win32';
 async function openPackage(dir, env) {
   const args = ['--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1'];
   if (!windows) {
-    args.push('--ozone-platform=x11');
+    // Keep the isolated Xvfb run on Chromium's software compositor.
+    args.push('--ozone-platform=x11', '--disable-gpu');
     if (process.env.KEYSHOAL_TEST_ALLOW_NO_SANDBOX === '1') args.push('--no-sandbox');
   }
   const child = spawn(executable, args, { env, stdio: 'ignore' });
@@ -164,17 +165,44 @@ export async function evidence(page, file, app, { fullPage = false } = {}) {
       return;
     }
   }
-  const xdotool = (args) => execFileSync(process.env.KEYSHOAL_XDOTOOL || 'xdotool', args, { encoding: 'utf8', timeout: 5000 });
-  const handle = app.pid ? xdotool(['search', '--sync', '--all', '--pid', String(app.pid), '--name', '^Keyshoal$']).trim().split('\n')[0] :
-    await app.evaluate(({ BrowserWindow }) => {
-    const window = BrowserWindow.getAllWindows()[0];
-    if (!window.isVisible()) window.show();
-    window.focus();
-    return window.getNativeWindowHandle().readUInt32LE();
-  });
+  const xdotool = args => execFileSync(process.env.KEYSHOAL_XDOTOOL || 'xdotool', args, { encoding: 'utf8', timeout: 5000 });
+  let handle;
+  if (app.pid) {
+    // Electron also owns tiny, non-content X11 windows. Match the app PID
+    // and a real content window rather than trusting the first X11 result.
+    const deadline = Date.now() + 10_000;
+    while (!handle && Date.now() < deadline) {
+      try {
+        const ids = xdotool(['search', '--pid', String(app.pid)]).trim().split('\n').filter(Boolean);
+        for (const id of ids) {
+          const geometry = xdotool(['getwindowgeometry', '--shell', id]);
+          const width = Number(geometry.match(/^WIDTH=(\d+)$/m)?.[1]);
+          const height = Number(geometry.match(/^HEIGHT=(\d+)$/m)?.[1]);
+          if (width >= 400 && height >= 540 && xdotool(['getwindowname', id]).trim() === 'Keyshoal') {
+            handle = id;
+            break;
+          }
+        }
+      } catch (error) {
+        if (error.status !== 1) throw error;
+      }
+      if (!handle) await delay(100);
+    }
+    assert.ok(handle, 'The packaged Keyshoal content window did not appear on the isolated X11 display.');
+  } else {
+    handle = await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      if (!window.isVisible()) window.show();
+      window.focus();
+      return window.getNativeWindowHandle().readUInt32LE();
+    });
+  }
   if (app.pid) xdotool(['windowmap', handle]);
   xdotool(['windowraise', String(handle)]);
-  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await page.evaluate(() => new Promise(resolve => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+    setTimeout(resolve, 300);
+  }));
   // Capture only the app window on the isolated X11 display. Chromium's
   // compositor capture can fail on software-rendered CI runners.
   execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'x11grab',
