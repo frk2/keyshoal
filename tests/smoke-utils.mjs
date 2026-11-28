@@ -112,7 +112,7 @@ export async function addLogin(page, origin, title = 'Demo login', beforeSave) {
   await page.getByRole('heading', { name: title }).waitFor();
   return result;
 }
-export async function evidence(page, file, app) {
+export async function evidence(page, file, app, { fullPage = false } = {}) {
   if (!process.env.KEYSHOAL_EVIDENCE) return;
   mkdirSync(process.env.KEYSHOAL_EVIDENCE, { recursive: true });
   const filename = path.join(process.env.KEYSHOAL_EVIDENCE, file);
@@ -129,7 +129,7 @@ export async function evidence(page, file, app) {
     try {
       // Use the packaged window's Chromium surface. Its DOM can be ready
       // before Electron's first native X11 window becomes visible.
-      const picture = await page.screenshot({ timeout: 3500 });
+      const picture = await page.screenshot({ fullPage, timeout: 3500 });
       const { data } = PNG.sync.read(picture);
       const first = data.readUInt32LE(0);
       let different = 0;
@@ -144,7 +144,7 @@ export async function evidence(page, file, app) {
     }
   }
   if (windows) {
-    try { return await page.screenshot({ path: filename }); }
+    try { return await page.screenshot({ fullPage, path: filename }); }
     catch {
       if (!app.evaluate) {
         const cdp = await page.context().newCDPSession(page);

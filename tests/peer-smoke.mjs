@@ -5,7 +5,7 @@ import { link, sync, settled, edit, scanSetup, wait, row, revealButton } from '.
 
 const runs = [];
 const origin = 'https://sync.example.test';
-const shot = (run, file) => evidence(run.page, 'peer-' + file + '.png', run.app);
+const shot = (run, file, options) => evidence(run.page, 'peer-' + file + '.png', run.app, options);
 
 async function hasPassword(run, title, expected) {
   const { page } = run;
@@ -31,9 +31,9 @@ try {
   await Promise.all([settled(a, 2), settled(b, 2), settled(c, 2)]);
   await hasPassword(b, 'Shared demo account', original);
   await hasPassword(c, 'Shared demo account', original);
-  await c.page.getByRole('button', { name: 'Devices', exact: true }).click(wait);
-  await settled(c, 2);
-  await shot(c, '01-two-peers-synced');
+  await a.page.getByRole('button', { name: 'Devices', exact: true }).click(wait);
+  await settled(a, 2);
+  await shot(a, '01-two-peers-synced');
 
   for (const run of runs) await sync(run, 'Pause');
   const versionA = await edit(a, 'Shared demo account', 'Edited on A');
@@ -58,7 +58,7 @@ try {
   await option.getByText(versionB, { exact: true }).waitFor(wait);
   await option.getByRole('button', { name: /Reveal version/ }).click(wait); // no secret in evidence
   await b.page.locator('#sync-badge').filter({ hasText: 'Offline · sync paused' }).waitFor(wait);
-  await shot(b, '03-choose-conflicting-version');
+  await shot(b, '03-choose-conflicting-version', { fullPage: true });
   await option.getByRole('button', { name: /Keep version/ }).click(wait);
   await b.page.getByRole('heading', { name: 'Edited on B', exact: true }).waitFor(wait);
 
